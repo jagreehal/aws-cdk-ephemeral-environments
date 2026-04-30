@@ -7,6 +7,7 @@ Automatically create and destroy temporary AWS environments for pull requests us
 This project enables you to spin up isolated, ephemeral AWS environments for each pull request and automatically tear them down when the PR is closed. Each environment includes an S3 bucket configured with appropriate security settings, encryption, and removal policies.
 
 **Key features:**
+
 - 🚀 **Automatic deployment** on PR open via GitHub Actions
 - 🧹 **Automatic cleanup** on PR close or scheduled daily
 - 🔐 **OIDC authentication** (no long-lived AWS credentials)
@@ -43,6 +44,7 @@ Let the setup script prefill everything from your system and AWS profile:
 ```
 
 This script intelligently prefills:
+
 - **Username** from `whoami` → `git config user.name` → GitHub CLI
 - **AWS Account & Region** from your current AWS credentials
 - **Environment name** as the stack prefix (e.g., `user-jreehal`)
@@ -61,6 +63,7 @@ Environment name (prefilled: user-jreehal): [press Enter or type custom name]
 ```
 
 Then deploy immediately:
+
 ```bash
 npx cdk deploy --context env=user-jreehal
 ```
@@ -195,22 +198,23 @@ npx cdk bootstrap aws://ACCOUNT_ID/us-west-2
 
 Add the following to your GitHub repository secrets:
 
-| Secret Name | Description |
-|------------|-------------|
-| `AWS_ACCOUNT_ID` | AWS account ID for deployment |
-| `ALARM_EMAIL` | Email for CloudWatch alarms (optional) |
+| Secret Name      | Description                            |
+| ---------------- | -------------------------------------- |
+| `AWS_ACCOUNT_ID` | AWS account ID for deployment          |
+| `ALARM_EMAIL`    | Email for CloudWatch alarms (optional) |
 
 #### Step 6: Configure GitHub Variables
 
 Add repository variables:
 
-| Variable | Value |
-|----------|-------|
+| Variable     | Value                              |
+| ------------ | ---------------------------------- |
 | `AWS_REGION` | Default region (e.g., `us-east-1`) |
 
 #### VPC Considerations
 
 The stack creates a new VPC with:
+
 - 3 AZs (prod) or 2 AZs (ephemeral)
 - Public, Private (with NAT), and Isolated subnets
 - VPC endpoints for S3, DynamoDB, ECR, CloudWatch, Secrets Manager, and RDS
@@ -219,16 +223,19 @@ The stack creates a new VPC with:
 #### Security Best Practices
 
 **Network Isolation**
+
 - RDS instances are deployed in isolated subnets (no internet access)
 - ECS tasks use private subnets with NAT for outbound
 - ALB is public but restricts traffic via security groups
 
 **Encryption**
+
 - All S3 buckets use encryption (KMS for prod, S3-managed for ephemeral)
 - RDS uses KMS encryption at rest
 - CloudWatch Logs use KMS encryption
 
 **Access Control**
+
 - IAM permission boundaries limit role capabilities
 - Security groups enforce least-privilege networking
 - No public access to any resources
@@ -303,6 +310,7 @@ docker-compose down
 ```
 
 **LocalStack Configuration:**
+
 - **Setup:** Requires `.env` file with `LOCALSTACK_AUTH_TOKEN` (see `.env` in repo root)
 - **AWS Profile:** `localstack` (credentials: `test`/`test`)
 - **Account ID:** `000000000000` (LocalStack default)
@@ -310,12 +318,14 @@ docker-compose down
 - **Endpoint:** `http://localhost:4566`
 
 **Testing locally:**
+
 1. Deploy stack: `AWS_PROFILE=localstack npx cdk deploy`
 2. Verify S3: `aws s3api list-buckets --endpoint-url=http://localhost:4566 --profile localstack`
 3. Check CloudFormation: `aws cloudformation list-stacks --endpoint-url=http://localhost:4566 --profile localstack`
 4. Cleanup: `AWS_PROFILE=localstack npx cdk destroy`
 
 **Differences from AWS:**
+
 - ✅ Useful for fast iteration and schema validation
 - ⚠️ LocalStack doesn't emulate all AWS services perfectly
 - ⚠️ Some features (IAM policies, CloudWatch metrics) have limited support
@@ -370,28 +380,6 @@ npm run cdk:destroy -- --context env=dev   # Clean up everything
 
 **Tip:** `make cdk-destroy ENV=dev` safely removes all resources including S3 buckets (for ephemeral environments) or retains them (for persistent environments per config).
 
-### Directory Structure
-
-```
-.
-├── bin/
-│   └── app.ts                          # CDK app entry point
-├── lib/
-│   ├── loadConfigForEnv.ts            # Config loader with validation
-│   └── my-app-stack.ts                # Main CDK stack definition
-├── .github/
-│   └── workflows/
-│       └── ephemeral-environments.yaml # GitHub Actions workflow
-├── docs/                              # Additional documentation
-├── config.json                        # Environment configuration
-├── config.example.json                # Example configuration
-├── cdk.json                           # CDK configuration
-├── Makefile                           # Convenient make targets
-├── package.json                       # Dependencies and scripts
-├── tsconfig.json                      # TypeScript configuration
-└── README.md                          # This file
-```
-
 ## How It Works
 
 ### Local Development Flow
@@ -445,11 +433,13 @@ Each environment can be configured with:
 ### Resource Behavior
 
 **Ephemeral environments (dev, PR-based):**
+
 - ❌ S3 buckets are **destroyed** on stack deletion
 - ✅ Objects are **auto-deleted** before bucket removal
 - 🔐 Encryption: S3-managed (standard)
 
 **Persistent environments (staging, prod):**
+
 - ✅ S3 buckets are **retained** on stack deletion (data protection)
 - 🔐 Encryption: KMS-managed (production-grade)
 - 🔒 All resources block public access and enforce SSL
@@ -459,6 +449,7 @@ Each environment can be configured with:
 ### Step 1: First-Time AWS Setup (Per Account)
 
 Complete the AWS setup steps outlined in the [AWS Setup](#4-aws-setup-one-time-per-account) section above if you haven't already. This includes:
+
 - Creating an OIDC provider
 - Setting up the `GitHubActionsRole` IAM role
 - Bootstrapping CDK per region
@@ -479,6 +470,7 @@ git push -u origin feature/my-feature
 ### Step 3: Test and Iterate
 
 Visit AWS Console:
+
 - **CloudFormation:** View your stack `MyAppStack-pr-<number>-<hash>`
 - **S3:** Access your ephemeral bucket
 - **CloudWatch:** Monitor deployment
@@ -497,6 +489,7 @@ Visit AWS Console:
 **Cause:** GitHub Actions can't assume the `GitHubActionsRole`
 
 **Solution:**
+
 1. Verify OIDC provider exists: `aws iam list-open-id-connect-providers`
 2. Check trust policy: `aws iam get-role --role-name GitHubActionsRole`
 3. Ensure `token.actions.githubusercontent.com:sub` matches `repo:YOUR_ORG/YOUR_REPO:*`
@@ -507,6 +500,7 @@ Visit AWS Console:
 **Cause:** CDK hasn't been bootstrapped in the account/region
 
 **Solution:**
+
 ```bash
 export AWS_ACCOUNT_ID=YOUR_ACCOUNT_ID
 export AWS_REGION=us-east-1
@@ -518,6 +512,7 @@ npx cdk bootstrap aws://${AWS_ACCOUNT_ID}/${AWS_REGION}
 **Cause:** Bucket names must be globally unique; a previous deployment left a bucket
 
 **Solution:**
+
 1. Check AWS console for leftover buckets
 2. Delete manually or by destroying the old stack:
    ```bash
@@ -529,6 +524,7 @@ npx cdk bootstrap aws://${AWS_ACCOUNT_ID}/${AWS_REGION}
 **Cause:** `GitHubActionsRole` lacks required permissions
 
 **Solution:**
+
 1. Verify the inline policy is attached: `aws iam get-role-policy --role-name GitHubActionsRole --policy-name CDKDeploymentPolicy`
 2. Check CloudFormation events for detailed errors in AWS Console
 
@@ -539,17 +535,13 @@ npx cdk bootstrap aws://${AWS_ACCOUNT_ID}/${AWS_REGION}
 - **AWS IAM OIDC:** https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc.html
 - **S3 Best Practices:** https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html
 
-## Project Status
-
-✅ **Ready for production use** once AWS setup (docs/AWS_SETUP.md) is complete
-
 ## Support
 
 For issues or questions:
+
 1. Check [Troubleshooting](#troubleshooting) above
-2. Review [docs/AWS_SETUP.md](docs/AWS_SETUP.md)
-3. Check GitHub Actions workflow logs for deployment errors
-4. Review CloudFormation events in AWS Console for stack failures
+2. Check GitHub Actions workflow logs for deployment errors
+3. Review CloudFormation events in AWS Console for stack failures
 
 ## License
 
