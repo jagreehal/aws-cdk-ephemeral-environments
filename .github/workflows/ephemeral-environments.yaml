@@ -1,0 +1,148 @@
+name: Deploy & Cleanup Ephemeral Environments
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/*'
+  pull_request:
+    types: [opened, synchronize, closed]
+  schedule:
+    - cron: '0 3 * * *'
+      timezone: 'America/New_York'
+  workflow_dispatch:
+    inputs:
+      dynamic_region:
+        description: 'Optional AWS region override'
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_DEFAULT_REGION: us-east-1
+
+jobs:
+  deploy:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: EphemeralDeployment
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine AWS Region
+        shell: bash
+        run: |
+          REGION='${{ inputs.dynamic_region }}'
+          if [ -z "$REGION" ]; then
+            REGION='${{ vars.AWS_REGION }}'
+          fi
+          if [ -z "$REGION" ]; then
+            REGION='${{ env.AWS_DEFAULT_REGION }}'
+          fi
+          echo "AWS_REGION=$REGION" >> "$GITHUB_ENV"
+          echo "Using AWS region: $REGION"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Application
+        run: make build
+
+      - name: Compute Environment Name
+        id: names
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SOURCE_NAME='${{ github.event.pull_request.head.ref }}'
+            PR_NUMBER='${{ github.event.pull_request.number }}'
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SOURCE_NAME='manual'
+          else
+            SOURCE_NAME='${{ github.ref_name }}'
+          fi
+
+          SANITIZED=$(echo "$SOURCE_NAME" | tr '[:upper:]' '[:lower:]' | tr '/_' '--' | tr -cd 'a-z0-9-' | cut -c1-20)
+          HASH=$(printf '%s' "$SOURCE_NAME" | sha256sum | cut -c1-8)
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            ENV_NAME="pr-${PR_NUMBER}-${HASH}"
+          else
+            ENV_NAME="branch-${SANITIZED}-${HASH}"
+          fi
+
+          echo "env_name=$ENV_NAME" >> "$GITHUB_OUTPUT"
+          echo "sanitized_env=$SANITIZED" >> "$GITHUB_OUTPUT"
+
+      - name: Create or Update Ephemeral Env
+        run: |
+          make cdk-deploy ENV='${{ steps.names.outputs.env_name }}'
+
+  cleanup:
+    if: (github.event_name == 'pull_request' && github.event.action == 'closed') || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    environment: EphemeralCleanup
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine AWS Region
+        shell: bash
+        run: |
+          REGION='${{ inputs.dynamic_region }}'
+          if [ -z "$REGION" ]; then
+            REGION='${{ vars.AWS_REGION }}'
+          fi
+          if [ -z "$REGION" ]; then
+            REGION='${{ env.AWS_DEFAULT_REGION }}'
+          fi
+          echo "AWS_REGION=$REGION" >> "$GITHUB_ENV"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Cleanup Ephemeral Environments
+        shell: bash
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # Delete all ephemeral stacks (both PR and branch-based)
+            aws cloudformation list-stacks \
+              --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE \
+              | jq -r '.StackSummaries[] | select(.StackName | (starts_with("pr-") or starts_with("branch-"))) | .StackName' \
+              | sort -u \
+              | xargs -r -I{} aws cloudformation delete-stack --stack-name {}
+          else
+            SOURCE_NAME='${{ github.event.pull_request.head.ref }}'
+            PR_NUMBER='${{ github.event.pull_request.number }}'
+            SANITIZED=$(echo "$SOURCE_NAME" | tr '[:upper:]' '[:lower:]' | tr '/_' '--' | tr -cd 'a-z0-9-' | cut -c1-20)
+            HASH=$(printf '%s' "$SOURCE_NAME" | sha256sum | cut -c1-8)
+            ENV_NAME="pr-${PR_NUMBER}-${HASH}"
+
+            make cdk-destroy ENV="$ENV_NAME"
+          fi

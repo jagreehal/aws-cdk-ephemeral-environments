@@ -1,0 +1,42 @@
+{
+  "name": "aws-cdk-ephemeral-environments",
+  "version": "1.0.0",
+  "description": "CDK app for ephemeral AWS environments with VPC, ECS, and RDS",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "cdk": "cdk",
+    "cdk:bootstrap": "cdk bootstrap",
+    "cdk:deploy": "cdk deploy --require-approval never",
+    "cdk:hot": "cdk deploy --hotswap-fallback",
+    "cdk:destroy": "cdk destroy --force",
+    "cdk:diff": "cdk diff",
+    "cdk:list": "cdk list",
+    "cdk:synth": "cdk synth",
+    "cdk:synth:output": "cdk synth -o cdk.out",
+    "cdk:synth:template": "cdk synth --json",
+    "lint": "eslint lib/ bin/ --ext .ts",
+    "lint:fix": "eslint lib/ bin/ --ext .ts --fix"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.251.0",
+    "constructs": "^10.6.0",
+    "aws-rfdk": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/jest": "^30.0.0",
+    "typescript": "^6.0.3",
+    "aws-cdk": "^2.1120.0",
+    "ts-node": "^10.9.2",
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.9",
+    "@typescript-eslint/eslint-plugin": "^8.59.1",
+    "@typescript-eslint/parser": "^8.59.1",
+    "eslint": "^10.2.1",
+    "eslint-import-resolver-typescript": "^4.4.4"
+  }
+}
