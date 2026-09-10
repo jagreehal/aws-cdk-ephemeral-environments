@@ -4,7 +4,23 @@ Automatically create and destroy temporary AWS environments for pull requests us
 
 ## Overview
 
-This project enables you to spin up isolated, ephemeral AWS environments for each pull request and automatically tear them down when the PR is closed. Each environment includes an S3 bucket configured with appropriate security settings, encryption, and removal policies.
+This project enables you to spin up isolated, ephemeral AWS environments for each pull request and automatically tear them down when the PR is closed. Each environment is a VPC with an ECS Fargate service behind an Application Load Balancer, an RDS Postgres instance, an S3 bucket and KMS keys, plus CloudWatch alarms and a dashboard.
+
+```bash
+make                # every target, grouped, with the current ENV
+make local-deploy   # the whole stack on your laptop — no AWS account (MiniStack)
+```
+
+Deploying to AWS instead:
+
+```bash
+make setup                    # one-time: adds an environment for you to config.json
+make cdk-deploy ENV=user-you  # prints the load balancer URL when it finishes
+make cdk-destroy ENV=user-you
+```
+
+Or open a pull request: CI deploys an environment and comments its URL on the PR, redeploys on
+every push, and destroys it when the PR closes.
 
 **Key features:**
 
@@ -41,7 +57,7 @@ npm run precheck   # typecheck, test, synth
 Let the setup script prefill everything from your system and AWS profile:
 
 ```bash
-./scripts/setup-local-env.sh
+make setup
 ```
 
 This script intelligently prefills:
@@ -338,37 +354,20 @@ make cdk-synth ENV=dev
 
 ### Available Commands
 
-Use the **Makefile** for convenient DX:
+`make` on its own lists every target, grouped, and shows which environment it will act on:
 
 ```bash
-# Install dependencies
-make install
-
-# Typecheck (tsx runs the CDK app straight from TypeScript, so there is no build output)
-make build
-
-# Run the tests
-make test
-
-# Watch TypeScript for changes
-make watch
-
-# CDK operations
-make cdk-bootstrap ENV=dev           # Bootstrap AWS account
-make cdk-deploy ENV=dev              # Deploy stack
-make cdk-destroy ENV=dev             # Destroy stack (removes all resources)
-make cdk-diff ENV=dev                # Preview changes
-make cdk-synth ENV=dev               # Generate CloudFormation
-make cdk-list                        # List stacks
-make list-envs                       # List ephemeral (PR) environments
+make                       # the list
+make ENV=pr-42-a3f7b1c2    # the list, with that environment as the target
 ```
 
-Or use **npm scripts** directly:
+Everything routes through it — `make setup`, `make test`, `make precheck`, `make local-deploy`,
+`make cdk-deploy ENV=…`, `make outputs`, `make list-envs`. The npm scripts underneath still work if
+you prefer them:
 
 ```bash
-npm run cdk:bootstrap -- --context env=dev
 npm run cdk:deploy -- --context env=dev
-npm run cdk:destroy -- --context env=dev   # Clean up everything
+npm run cdk:destroy -- --context env=dev
 ```
 
 **Tip:** `make cdk-destroy ENV=dev` safely removes all resources including S3 buckets (for ephemeral environments) or retains them (for persistent environments per config).
@@ -397,6 +396,7 @@ The Makefile makes it easy to iterate: build → deploy → test → destroy.
 6. ✅ **GitHub Actions automatically:**
    - Deletes the temporary CloudFormation stack
    - Removes all ephemeral resources
+   - Edits the PR comment to say the environment is gone, so no dead link is left behind
 7. **Scheduled cleanup** (daily 03:00 UTC) deletes any orphaned `pr-` / `branch-` stacks
 
 ### Environment Names

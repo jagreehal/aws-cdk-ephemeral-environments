@@ -30,7 +30,15 @@ try {
     terminationProtection: config.isProduction,
   });
 } catch (error) {
-  console.error(`Failed to load config for environment '${envName}':`, error);
+  // A config problem is a typo, not a crash: print what is wrong and what to do, not a stack trace
+  // through the CDK toolkit. Anything else is a real bug and should keep its trace.
+  if (!(error instanceof Error)) {
+    throw error;
+  }
+
+  console.error(`\n  Cannot deploy environment '${envName}'\n`);
+  console.error(`  ${error.message}\n`);
+  console.error('  Fix config.json, or run `make setup` to add an environment for yourself.\n');
   process.exit(1);
 }
 

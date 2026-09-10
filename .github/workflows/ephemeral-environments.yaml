@@ -19,6 +19,8 @@ on:
 permissions:
   id-token: write
   contents: read
+  # The deploy comments the environment URL on the pull request.
+  pull-requests: write
 
 env:
   # First non-empty wins: workflow input, repo variable, then the default.
@@ -65,6 +67,55 @@ jobs:
       - name: Create or Update Ephemeral Env
         run: make cdk-deploy ENV='${{ steps.names.outputs.env_name }}'
 
+      # The whole point of an ephemeral environment is the URL, so put it where the reviewer
+      # already is instead of leaving it in the job log. One sticky comment, edited on each push.
+      - name: Post Environment To PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          ENV_NAME: ${{ steps.names.outputs.env_name }}
+        with:
+          script: |
+            const { readFileSync } = require('fs');
+            const outputs = JSON.parse(readFileSync('cdk-outputs.json', 'utf8'));
+            const [stack, values] = Object.entries(outputs)[0];
+            const rows = Object.entries(values)
+              .filter(([key]) => key !== 'LoadBalancerUrl')
+              .map(([key, value]) => `| ${key} | \`${value}\` |`)
+              .join('\n');
+
+            const body = [
+              '<!-- ephemeral-env -->',
+              `### 🚀 Environment \`${process.env.ENV_NAME}\` is live`,
+              '',
+              `**${values.LoadBalancerUrl}**`,
+              '',
+              `Stack \`${stack}\` in \`${process.env.AWS_REGION}\`. Redeployed on every push, destroyed when this PR closes.`,
+              '',
+              '<details><summary>Stack outputs</summary>',
+              '',
+              '| Output | Value |',
+              '| --- | --- |',
+              rows,
+              '',
+              '</details>',
+            ].join('\n');
+
+            await require('./.github/scripts/sticky-comment.js')({ github, context, body });
+
+      - name: Job Summary
+        if: always() && steps.names.outputs.env_name != ''
+        run: |
+          {
+            echo "### Environment \`${{ steps.names.outputs.env_name }}\`"
+            echo
+            if [ -f cdk-outputs.json ]; then
+              jq -r 'to_entries[] | .value | to_entries[] | "- **\(.key)**: \(.value)"' cdk-outputs.json
+            else
+              echo "Deploy did not produce outputs."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   cleanup:
     if: (github.event_name == 'pull_request' && github.event.action == 'closed') || github.event_name == 'schedule'
     runs-on: ubuntu-latest
@@ -88,13 +139,32 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Destroy This PR's Environment
+        id: destroy
         if: github.event_name == 'pull_request'
         run: |
           ENV_NAME=$(scripts/env-name.sh pull_request \
             '${{ github.event.pull_request.head.ref }}' \
             '${{ github.event.pull_request.number }}')
           echo "Destroying environment: $ENV_NAME"
+          echo "env_name=$ENV_NAME" >> "$GITHUB_OUTPUT"
           make cdk-destroy ENV="$ENV_NAME"
+
+      # Edits the same comment the deploy posted, so the PR never keeps a link to a dead URL.
+      - name: Mark Environment Destroyed
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          ENV_NAME: ${{ steps.destroy.outputs.env_name }}
+        with:
+          script: |
+            const body = [
+              '<!-- ephemeral-env -->',
+              `### 🧹 Environment \`${process.env.ENV_NAME}\` destroyed`,
+              '',
+              'Its resources were removed when this pull request closed.',
+            ].join('\n');
+
+            await require('./.github/scripts/sticky-comment.js')({ github, context, body });
 
       # Nightly sweep: ephemeral envs are capped at a day, so a stale one never outlives its PR.
       - name: Destroy All Ephemeral Environments
