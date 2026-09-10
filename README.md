@@ -372,6 +372,19 @@ npm run cdk:destroy -- --context env=dev
 
 **Tip:** `make cdk-destroy ENV=dev` safely removes all resources including S3 buckets (for ephemeral environments) or retains them (for persistent environments per config).
 
+### Formatting and the pre-commit hook
+
+Prettier owns formatting (`.prettierrc.json`); markdown and lockfiles are left alone
+(`.prettierignore`). `npm install` points `core.hooksPath` at `.githooks`, so a pre-commit hook
+checks formatting and lints **only the staged files** — a second or two, not the full suite. The
+full gate stays `make precheck` (format, lint, typecheck, tests, synth), which is what CI runs.
+
+```bash
+npm run format        # fix formatting
+npm run format:check  # what the hook checks
+git commit --no-verify  # skip the hook for one commit
+```
+
 ## How It Works
 
 ### Local Development Flow

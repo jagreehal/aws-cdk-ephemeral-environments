@@ -2,31 +2,20 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "node16",
-    "lib": [
-      "ES2022"
-    ],
+    "lib": ["ES2022"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "moduleResolution": "node16",
-    "types": [
-      "node"
-    ],
+    "types": ["node"],
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "noEmit": true
   },
-  "include": [
-    "bin/**/*",
-    "lib/**/*",
-    "test/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "cdk.out"
-  ]
+  "include": ["bin/**/*", "lib/**/*", "test/**/*"],
+  "exclude": ["node_modules", "cdk.out"]
 }

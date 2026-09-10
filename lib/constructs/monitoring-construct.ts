@@ -26,8 +26,15 @@ export class MonitoringConstruct extends Construct {
   constructor(scope: Construct, id: string, props: MonitoringConstructProps) {
     super(scope, id);
 
-    const { namePrefix, isProduction, removalPolicy, alarmEmail, albName, ecsClusterName, rdsIdentifier } =
-      props;
+    const {
+      namePrefix,
+      isProduction,
+      removalPolicy,
+      alarmEmail,
+      albName,
+      ecsClusterName,
+      rdsIdentifier,
+    } = props;
 
     this.logGroup = new logs.LogGroup(this, 'MonitoringLogGroup', {
       logGroupName: `/aws/ephemeral-envs/${namePrefix}`,
@@ -206,7 +213,11 @@ export class MonitoringConstruct extends Construct {
     this.createRdsAlarms(rdsIdentifier, cpuUtilization, freeStorage);
   }
 
-  private createEcsAlarms(clusterName: string, cpuMetric: cloudwatch.Metric, memoryMetric: cloudwatch.Metric): void {
+  private createEcsAlarms(
+    clusterName: string,
+    cpuMetric: cloudwatch.Metric,
+    memoryMetric: cloudwatch.Metric,
+  ): void {
     const cpuAlarm = new cloudwatch.Alarm(this, 'EcsCpuAlarm', {
       metric: cpuMetric,
       threshold: 80,

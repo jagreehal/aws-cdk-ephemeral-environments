@@ -10,6 +10,8 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint bin lib test",
     "lint:fix": "eslint bin lib test --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "cdk": "cdk",
     "cdk:bootstrap": "cdk bootstrap",
     "cdk:deploy": "cdk deploy --require-approval never",
@@ -18,7 +20,8 @@
     "cdk:diff": "cdk diff",
     "cdk:list": "cdk list",
     "cdk:synth": "cdk synth",
-    "precheck": "npm run build && npm test && npm run cdk:synth -- --quiet"
+    "precheck": "npm run format:check && npm run lint && npm run build && npm test && npm run cdk:synth -- --quiet",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.268.0",
@@ -31,6 +34,7 @@
     "aws-cdk": "^2.1141.0",
     "aws-cdk-local": "^3.0.4",
     "eslint": "^10.10.0",
+    "prettier": "^3.9.6",
     "tsx": "^4.22.3",
     "typescript": "~6.0.3",
     "vitest": "^4.1.7"

@@ -28,7 +28,10 @@ export function loadConfigForEnv(env: string, configPath: string): Config {
   let configData: Record<string, Partial<Config>>;
 
   try {
-    configData = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, Partial<Config>>;
+    configData = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<
+      string,
+      Partial<Config>
+    >;
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(`Configuration file contains invalid JSON: ${configPath}`);
@@ -52,7 +55,9 @@ export function loadConfigForEnv(env: string, configPath: string): Config {
   const account = process.env.CDK_DEFAULT_ACCOUNT?.trim() || config.account?.trim();
 
   if (!account) {
-    throw new Error('Configuration account is missing: set it in config.json or CDK_DEFAULT_ACCOUNT.');
+    throw new Error(
+      'Configuration account is missing: set it in config.json or CDK_DEFAULT_ACCOUNT.',
+    );
   }
 
   if (!ACCOUNT_PATTERN.test(account)) {

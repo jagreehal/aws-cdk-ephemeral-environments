@@ -41,7 +41,9 @@ export class VpcConstruct extends Construct {
         {
           name: 'Private',
           // Without a NAT gateway there is no egress to give these subnets.
-          subnetType: isLocal ? ec2.SubnetType.PRIVATE_ISOLATED : ec2.SubnetType.PRIVATE_WITH_EGRESS,
+          subnetType: isLocal
+            ? ec2.SubnetType.PRIVATE_ISOLATED
+            : ec2.SubnetType.PRIVATE_WITH_EGRESS,
           cidrMask: 20,
         },
         {

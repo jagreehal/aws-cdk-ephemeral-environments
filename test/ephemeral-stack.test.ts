@@ -137,8 +137,9 @@ describe('EphemeralStack', () => {
 
       expect(endpoints).toHaveLength(2);
       for (const endpoint of endpoints) {
-        expect((endpoint as { Properties: { VpcEndpointType: string } }).Properties.VpcEndpointType)
-          .toBe('Gateway');
+        expect(
+          (endpoint as { Properties: { VpcEndpointType: string } }).Properties.VpcEndpointType,
+        ).toBe('Gateway');
       }
     });
   });
