@@ -1,14 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 export interface VpcConstructProps {
-  readonly prefix: string;
-  readonly stackEnvName: string;
+  readonly namePrefix: string;
   readonly isProduction: boolean;
-  readonly removalPolicy: cdk.RemovalPolicy;
 }
 
 export class VpcConstruct extends Construct {
@@ -20,12 +17,10 @@ export class VpcConstruct extends Construct {
   constructor(scope: Construct, id: string, props: VpcConstructProps) {
     super(scope, id);
 
-    const { prefix, stackEnvName, isProduction, removalPolicy } = props;
-
-    const vpcName = `${prefix}-${stackEnvName}-vpc`;
+    const { namePrefix, isProduction } = props;
 
     this.vpc = new ec2.Vpc(this, 'Vpc', {
-      vpcName,
+      vpcName: `${namePrefix}-vpc`,
       maxAzs: isProduction ? 3 : 2,
       natGateways: isProduction ? 3 : 1,
       enableDnsHostnames: true,
@@ -56,47 +51,11 @@ export class VpcConstruct extends Construct {
     this.isolatedSubnets = this.vpc.isolatedSubnets;
 
     this.addFlowLogs();
-    this.addVpcEndpoints();
-    this.applyTags();
-  }
 
-  private addFlowLogs(): void {
-    const flowLogsGroup = new logs.LogGroup(this, 'FlowLogsGroup', {
-      logGroupName: `/aws/vpc/flowlogs/${cdk.Stack.of(this).stackName}`,
-      retention: logs.RetentionDays.ONE_WEEK,
-    });
-
-    const flowLogsRole = new iam.Role(this, 'FlowLogsRole', {
-      assumedBy: new iam.ServicePrincipal('vpc-flow-logs.amazonaws.com'),
-      inlinePolicies: {
-        FlowLogsToCloudWatch: new iam.PolicyDocument({
-          statements: [
-            new iam.PolicyStatement({
-              actions: [
-                'logs:CreateLogGroup',
-                'logs:CreateLogStream',
-                'logs:PutLogEvents',
-                'logs:DescribeLogGroups',
-                'logs:DescribeLogStreams',
-              ],
-              resources: ['*'],
-            }),
-          ],
-        }),
-      },
-    });
-
-    new ec2.CfnFlowLog(this, 'FlowLog', {
-      resourceType: 'AWS::EC2::VPC',
-      resourceId: this.vpc.vpcId,
-      trafficType: ec2.FlowLogTrafficType.ALL,
-      logDestinationType: 'cloud-watch-logs',
-      logGroupName: flowLogsGroup.logGroupName,
-      deliverLogsPermissionArn: flowLogsRole.roleArn,
-    });
-  }
-
-  private addVpcEndpoints(): void {
+    // Gateway endpoints only: they are free, and the NAT gateway already carries the rest of the
+    // egress. Interface endpoints (ECR/logs/secrets/RDS) are ~$7/AZ/month each — real money on an
+    // env that lives for the length of a PR.
+    // ponytail: add interface endpoints if you drop the NAT gateway for isolated-subnet tasks.
     new ec2.GatewayVpcEndpoint(this, 'S3Endpoint', {
       vpc: this.vpc,
       service: ec2.GatewayVpcEndpointAwsService.S3,
@@ -107,54 +66,25 @@ export class VpcConstruct extends Construct {
       service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
     });
 
-    new ec2.InterfaceVpcEndpoint(this, 'EcrApiEndpoint', {
-      vpc: this.vpc,
-      service: ec2.InterfaceVpcEndpointAwsService.ECR,
-      subnets: {
-        subnets: this.isolatedSubnets,
-      },
-      privateDnsEnabled: false,
-    });
-
-    new ec2.InterfaceVpcEndpoint(this, 'EcrDockerEndpoint', {
-      vpc: this.vpc,
-      service: ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER,
-      subnets: {
-        subnets: this.isolatedSubnets,
-      },
-      privateDnsEnabled: false,
-    });
-
-    new ec2.InterfaceVpcEndpoint(this, 'CloudWatchEndpoint', {
-      vpc: this.vpc,
-      service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
-      subnets: {
-        subnets: this.isolatedSubnets,
-      },
-      privateDnsEnabled: false,
-    });
-
-    new ec2.InterfaceVpcEndpoint(this, 'SecretsManagerEndpoint', {
-      vpc: this.vpc,
-      service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
-      subnets: {
-        subnets: this.isolatedSubnets,
-      },
-      privateDnsEnabled: false,
-    });
-
-    new ec2.InterfaceVpcEndpoint(this, 'RdsEndpoint', {
-      vpc: this.vpc,
-      service: ec2.InterfaceVpcEndpointAwsService.RDS,
-      subnets: {
-        subnets: this.isolatedSubnets,
-      },
-      privateDnsEnabled: false,
-    });
-  }
-
-  private applyTags(): void {
     cdk.Tags.of(this.vpc).add('Architecture', 'Isolated');
     cdk.Tags.of(this.vpc).add('Network', 'Private');
+  }
+
+  /**
+   * CloudWatch flow logs on our own log group (the L2 default group has no retention control).
+   * `addFlowLog` wires up the delivery role, which the previous hand-rolled `CfnFlowLog` got
+   * wrong — it passed `AWS::EC2::VPC` where CloudFormation expects `VPC`.
+   */
+  private addFlowLogs(): void {
+    const logGroup = new logs.LogGroup(this, 'FlowLogsGroup', {
+      logGroupName: `/aws/vpc/flowlogs/${cdk.Stack.of(this).stackName}`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    this.vpc.addFlowLog('FlowLog', {
+      destination: ec2.FlowLogDestination.toCloudWatchLogs(logGroup),
+      trafficType: ec2.FlowLogTrafficType.ALL,
+    });
   }
 }

@@ -1,23 +1,17 @@
 {
-  "dev": {
+  "default": {
     "account": "111111111111",
     "region": "us-east-1",
     "isProduction": false,
-    "prefix": "dev",
     "isPersistent": false
   },
   "staging": {
     "account": "222222222222",
-    "region": "us-east-1",
-    "isProduction": false,
-    "prefix": "stage",
     "isPersistent": true
   },
   "prod": {
     "account": "333333333333",
-    "region": "us-east-1",
     "isProduction": true,
-    "prefix": "prod",
     "isPersistent": true
   }
 }

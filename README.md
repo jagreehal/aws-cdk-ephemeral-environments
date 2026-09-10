@@ -19,7 +19,7 @@ This project enables you to spin up isolated, ephemeral AWS environments for eac
 
 ### 1. Prerequisites
 
-- **Node.js** 20.x or later
+- **Node.js** 22.x or later
 - **AWS CLI** v2
 - **Git** (with `user.name` configured)
 - **GitHub CLI** (optional, for auto-prefilling GitHub username)
@@ -32,7 +32,7 @@ This project enables you to spin up isolated, ephemeral AWS environments for eac
 git clone <repo-url>
 cd aws-cdk-ephemeral-environments
 npm ci
-npm run build
+npm run precheck   # typecheck, test, synth
 ```
 
 ### 3. Quick Setup for New Team Members
@@ -47,7 +47,7 @@ This script intelligently prefills:
 
 - **Username** from `whoami` → `git config user.name` → GitHub CLI
 - **AWS Account & Region** from your current AWS credentials
-- **Environment name** as the stack prefix (e.g., `user-jreehal`)
+- **Environment name**, which names the stack and every resource in it (e.g. `user-jreehal`)
 
 Then confirm or override any value:
 
@@ -217,8 +217,8 @@ The stack creates a new VPC with:
 
 - 3 AZs (prod) or 2 AZs (ephemeral)
 - Public, Private (with NAT), and Isolated subnets
-- VPC endpoints for S3, DynamoDB, ECR, CloudWatch, Secrets Manager, and RDS
-- VPC Flow Logs with 90-day retention
+- Gateway VPC endpoints for S3 and DynamoDB (interface endpoints are billed per AZ per hour, so an env that lives for one PR uses the NAT gateway instead)
+- VPC Flow Logs with 1-week retention
 
 #### Security Best Practices
 
@@ -262,28 +262,27 @@ Update `config.json` with your AWS account IDs:
 
 ```json
 {
-  "dev": {
+  "default": {
     "account": "YOUR_DEV_ACCOUNT_ID",
     "region": "us-east-1",
     "isProduction": false,
-    "prefix": "dev"
+    "isPersistent": false
   },
   "staging": {
     "account": "YOUR_STAGING_ACCOUNT_ID",
-    "region": "us-east-1",
-    "isProduction": false,
-    "prefix": "stage",
     "isPersistent": true
   },
   "prod": {
     "account": "YOUR_PROD_ACCOUNT_ID",
-    "region": "us-east-1",
     "isProduction": true,
-    "prefix": "prod",
     "isPersistent": true
   }
 }
 ```
+
+Named entries merge over `default`, and **any environment without an entry gets `default`** — which
+is how every CI-generated `pr-123-ab12` environment resolves without touching this file.
+`CDK_DEFAULT_ACCOUNT` overrides the account, so CI never needs a real account ID committed here.
 
 ### 6. Test Locally with LocalStack (Optional)
 
@@ -296,8 +295,7 @@ docker-compose up -d
 # Verify LocalStack is ready
 aws s3api list-buckets --endpoint-url=http://localhost:4566 --profile localstack
 
-# Build and deploy to LocalStack
-npm run build
+# Deploy to LocalStack
 AWS_PROFILE=localstack npx cdk deploy --require-approval never
 
 # Test your deployed resources
@@ -334,7 +332,7 @@ docker-compose down
 ### 7. Test Locally (Without LocalStack)
 
 ```bash
-# Build the TypeScript
+# Typecheck
 npm run build
 
 # Synthesize CloudFormation for dev environment
@@ -354,8 +352,11 @@ Use the **Makefile** for convenient DX:
 # Install dependencies
 make install
 
-# Build TypeScript
+# Typecheck (tsx runs the CDK app straight from TypeScript, so there is no build output)
 make build
+
+# Run the tests
+make test
 
 # Watch TypeScript for changes
 make watch
@@ -397,14 +398,14 @@ The Makefile makes it easy to iterate: build → deploy → test → destroy.
 2. **Open a Pull Request**
 3. ✅ **GitHub Actions automatically:**
    - Builds your code
-   - Creates a new AWS stack: `MyAppStack-pr-<number>-<hash>`
+   - Typechecks, tests and synths, then creates the stack `pr-<number>-<hash>-ephemeral`
    - Deploys to your AWS account
 4. **Test your ephemeral environment** using the deployed S3 bucket and resources
 5. **Close the PR**
 6. ✅ **GitHub Actions automatically:**
    - Deletes the temporary CloudFormation stack
    - Removes all ephemeral resources
-7. **Scheduled cleanup** (daily 3 AM ET) deletes any orphaned PR stacks
+7. **Scheduled cleanup** (daily 03:00 UTC) deletes any orphaned `pr-` / `branch-` stacks
 
 ### Environment Names
 
@@ -424,11 +425,15 @@ Ephemeral environments are named based on the PR and branch:
 
 Each environment can be configured with:
 
-- **account**: 12-digit AWS account ID
-- **region**: AWS region (us-east-1, us-west-2, eu-west-1, eu-west-2)
-- **isProduction**: Set to `true` for production (enables KMS encryption, stricter security)
-- **prefix**: Resource name prefix (used in bucket names, tags)
-- **isPersistent**: If `true`, resources are retained on stack deletion (for prod/staging)
+- **account**: 12-digit AWS account ID (overridden by `CDK_DEFAULT_ACCOUNT` when set)
+- **region**: AWS region (us-east-1, us-west-2, eu-west-1, eu-west-2 — override the list with `VALID_REGIONS`)
+- **isProduction**: `true` for production (multi-AZ RDS, KMS encryption, termination protection)
+- **isPersistent**: `true` to retain resources on stack deletion (staging/prod)
+
+Names come from the environment name alone: env `pr-42-a3f7b1c2` deploys the stack
+`pr-42-a3f7b1c2-ephemeral` and names its resources `pr-42-a3f7b1c2-ephemeral-*`. Because the stack
+name starts with the environment name, `make list-envs` and the cleanup workflow can find every
+ephemeral stack by its `pr-` / `branch-` prefix.
 
 ### Resource Behavior
 
@@ -471,7 +476,7 @@ git push -u origin feature/my-feature
 
 Visit AWS Console:
 
-- **CloudFormation:** View your stack `MyAppStack-pr-<number>-<hash>`
+- **CloudFormation:** View your stack `pr-<number>-<hash>-ephemeral`
 - **S3:** Access your ephemeral bucket
 - **CloudWatch:** Monitor deployment
 

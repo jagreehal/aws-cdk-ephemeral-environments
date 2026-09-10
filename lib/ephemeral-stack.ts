@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { RemovalPolicy } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import type { Config } from './loadConfigForEnv';
+import { nameFor } from './constants';
 import { VpcConstruct } from './constructs/vpc-construct';
 import { EcsConstruct } from './constructs/ecs-construct';
 import { DatabaseConstruct } from './constructs/database-construct';
@@ -10,7 +11,8 @@ import { MonitoringConstruct } from './constructs/monitoring-construct';
 
 export interface EphemeralStackProps extends cdk.StackProps {
   config: Config;
-  stackEnvName: string;
+  /** Environment name: `dev`, `prod`, or a CI-generated `pr-123-ab12` / `branch-foo-ab12`. */
+  envName: string;
   appImage?: string;
   containerPort?: number;
   desiredCount?: number;
@@ -25,7 +27,7 @@ export class EphemeralStack extends cdk.Stack {
 
     const {
       config,
-      stackEnvName,
+      envName,
       appImage = 'public.ecr.aws/nginx/nginx:alpine',
       containerPort = 80,
       desiredCount = 2,
@@ -36,26 +38,24 @@ export class EphemeralStack extends cdk.Stack {
 
     const isEphemeral = !config.isProduction && !config.isPersistent;
     const removalPolicy = isEphemeral ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN;
+    const namePrefix = nameFor(envName);
 
     this.applyRemovalPolicy(removalPolicy);
 
     const vpcConstruct = new VpcConstruct(this, 'Vpc', {
-      prefix: config.prefix,
-      stackEnvName,
+      namePrefix,
       isProduction: config.isProduction,
-      removalPolicy,
     });
 
     const securityConstruct = new SecurityConstruct(this, 'Security', {
-      prefix: config.prefix,
-      stackEnvName,
+      namePrefix,
       isProduction: config.isProduction,
       removalPolicy,
     });
 
     const ecsConstruct = new EcsConstruct(this, 'Ecs', {
-      prefix: config.prefix,
-      stackEnvName,
+      namePrefix,
+      envName,
       vpcConstruct,
       isProduction: config.isProduction,
       isEphemeral,
@@ -63,11 +63,12 @@ export class EphemeralStack extends cdk.Stack {
       appImage,
       containerPort,
       desiredCount,
+      storageBucket: securityConstruct.storageBucket,
+      kmsKey: securityConstruct.kmsKey,
     });
 
     const databaseConstruct = new DatabaseConstruct(this, 'Database', {
-      prefix: config.prefix,
-      stackEnvName,
+      namePrefix,
       vpcConstruct,
       isProduction: config.isProduction,
       isEphemeral,
@@ -78,8 +79,7 @@ export class EphemeralStack extends cdk.Stack {
     });
 
     new MonitoringConstruct(this, 'Monitoring', {
-      prefix: config.prefix,
-      stackEnvName,
+      namePrefix,
       isProduction: config.isProduction,
       removalPolicy,
       alarmEmail,
@@ -89,7 +89,7 @@ export class EphemeralStack extends cdk.Stack {
     });
 
     this.outputReferences(ecsConstruct, databaseConstruct, securityConstruct);
-    this.applyTags(config, stackEnvName, isEphemeral);
+    this.applyTags(config, envName, isEphemeral);
   }
 
   private applyRemovalPolicy(policy: RemovalPolicy): void {
@@ -148,9 +148,9 @@ export class EphemeralStack extends cdk.Stack {
     });
   }
 
-  private applyTags(config: Config, stackEnvName: string, isEphemeral: boolean): void {
+  private applyTags(config: Config, envName: string, isEphemeral: boolean): void {
     const tags: Record<string, string> = {
-      Environment: stackEnvName,
+      Environment: envName,
       EnvironmentType: isEphemeral ? 'Ephemeral' : 'Persistent',
       ManagedBy: 'CDK',
       Project: 'EphemeralEnvironments',

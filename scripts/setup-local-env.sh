@@ -17,7 +17,11 @@ SYSTEM_USER=$(whoami)
 GIT_USER=$(git config user.name 2>/dev/null || echo "")
 GH_USER=$(gh api user --jq '.login' 2>/dev/null || echo "")
 
-PREFILL_USER="${GH_USER:-$GIT_USER:-$SYSTEM_USER}"
+PREFILL_USER="$GH_USER"
+[ -z "$PREFILL_USER" ] && PREFILL_USER="$GIT_USER"
+[ -z "$PREFILL_USER" ] && PREFILL_USER="$SYSTEM_USER"
+# Stack names allow letters, digits and hyphens only, so a git name like "Jag Reehal" needs a scrub.
+PREFILL_USER=$(echo "$PREFILL_USER" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/-$//')
 
 read -p "Environment name (prefilled: user-$PREFILL_USER): " ENV_INPUT
 ENV_NAME="${ENV_INPUT:-user-$PREFILL_USER}"
@@ -45,12 +49,12 @@ echo "📋 Summary:"
 echo "  Environment: $ENV_NAME"
 echo "  Account:     $AWS_ACCOUNT"
 echo "  Region:      $AWS_REGION_FINAL"
-echo "  Prefix:      $ENV_NAME (used in stack names)"
+echo "  Stack:       $ENV_NAME-ephemeral"
 echo ""
 
-read -p "Create this configuration? (y/n) " -n 1 -r
+read -p "Create this configuration? (Y/n) " -n 1 -r
 echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+if [[ $REPLY =~ ^[Nn]$ ]]; then
   echo "Cancelled."
   exit 0
 fi
@@ -58,9 +62,9 @@ fi
 # Check if config already exists
 if jq -e ".$ENV_NAME" "$CONFIG_FILE" >/dev/null 2>&1; then
   echo "⚠️  Configuration for '$ENV_NAME' already exists in config.json"
-  read -p "Overwrite? (y/n) " -n 1 -r
+  read -p "Overwrite? (Y/n) " -n 1 -r
   echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+  if [[ $REPLY =~ ^[Nn]$ ]]; then
     echo "Cancelled."
     exit 0
   fi
@@ -75,9 +79,7 @@ NEW_CONFIG=$(jq \
     "account": $account,
     "region": $region,
     "isProduction": false,
-    "prefix": $env,
-    "isPersistent": false,
-    "useSsmConfig": false
+    "isPersistent": false
   }' "$CONFIG_FILE")
 
 echo "$NEW_CONFIG" > "$CONFIG_FILE"
