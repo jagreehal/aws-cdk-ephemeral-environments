@@ -28,7 +28,59 @@ const prod: Partial<EphemeralStackProps> = {
   envName: 'prod',
 };
 
+const local: Partial<EphemeralStackProps> = {
+  config: { ...baseConfig, isLocal: true },
+  envName: 'local',
+};
+
 describe('EphemeralStack', () => {
+  // MiniStack's CloudFormation engine implements a subset of AWS. Local mode exists to stay inside
+  // it, so these assert the absence of the resource types that made a local deploy fail.
+  describe('local mode (MiniStack)', () => {
+    test('emits none of the resource types MiniStack cannot provision', () => {
+      const template = synth(local);
+
+      for (const type of [
+        'AWS::EC2::NatGateway',
+        'AWS::EC2::EIP',
+        'AWS::EC2::FlowLog',
+        'AWS::EC2::SecurityGroupIngress',
+        'AWS::RDS::DBSubnetGroup',
+        'AWS::SecretsManager::SecretTargetAttachment',
+        'AWS::RDS::DBInstance',
+      ]) {
+        template.resourceCountIs(type, 0);
+      }
+    });
+
+    test('emits no Lambda-backed custom resources, which MiniStack never completes', () => {
+      const resources = synth(local).toJSON().Resources as Record<string, { Type: string }>;
+
+      expect(
+        Object.values(resources).filter(
+          (r) => r.Type.startsWith('Custom::') || r.Type === 'AWS::Lambda::Function',
+        ),
+      ).toHaveLength(0);
+    });
+
+    test('still deploys the app: cluster, service, task definition and load balancer', () => {
+      const template = synth(local);
+
+      template.resourceCountIs('AWS::ECS::Cluster', 1);
+      template.resourceCountIs('AWS::ECS::Service', 1);
+      template.resourceCountIs('AWS::ECS::TaskDefinition', 1);
+      template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
+    });
+
+    test('leaves the AWS deploy untouched', () => {
+      const template = synth();
+
+      template.resourceCountIs('AWS::EC2::NatGateway', 1);
+      template.resourceCountIs('AWS::EC2::FlowLog', 1);
+      template.resourceCountIs('AWS::RDS::DBInstance', 1);
+    });
+  });
+
   describe('naming', () => {
     test('names resources from the env name, with no duplicated prefix', () => {
       const template = synth({ envName: 'pr-123-abcdef' });

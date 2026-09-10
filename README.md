@@ -13,6 +13,7 @@ This project enables you to spin up isolated, ephemeral AWS environments for eac
 - 🔐 **OIDC authentication** (no long-lived AWS credentials)
 - 📦 **Environment-aware configuration** (dev/staging/prod)
 - 💾 **Persistent vs ephemeral** resource handling
+- 💻 **Local deploys** against [MiniStack](https://ministack.org) — no AWS account needed
 - 🏗️ **Infrastructure as Code** using AWS CDK and TypeScript
 
 ## Quick Start
@@ -284,52 +285,43 @@ Named entries merge over `default`, and **any environment without an entry gets 
 is how every CI-generated `pr-123-ab12` environment resolves without touching this file.
 `CDK_DEFAULT_ACCOUNT` overrides the account, so CI never needs a real account ID committed here.
 
-### 6. Test Locally with LocalStack (Optional)
+### 6. Deploy Locally with MiniStack (Optional)
 
-For fast local testing without deploying to AWS:
+[MiniStack](https://ministack.org) emulates AWS on `http://localhost:4566`, so the whole stack can
+be deployed on a laptop with no AWS account. `cdklocal` is the CDK wrapper that points the toolkit
+at it ([docs](https://ministack.org/docs/iac#cdk)).
 
 ```bash
-# Start LocalStack and Step Functions (requires Docker)
-docker-compose up -d
-
-# Verify LocalStack is ready
-aws s3api list-buckets --endpoint-url=http://localhost:4566 --profile localstack
-
-# Deploy to LocalStack
-AWS_PROFILE=localstack npx cdk deploy --require-approval never
-
-# Test your deployed resources
-aws s3api list-buckets --endpoint-url=http://localhost:4566 --profile localstack
-aws s3api head-bucket --bucket <bucket-name> --endpoint-url=http://localhost:4566 --profile localstack
-
-# Destroy stack and cleanup
-AWS_PROFILE=localstack npx cdk destroy
-docker-compose down
+make local-deploy     # starts MiniStack, bootstraps, deploys the `local` environment
+make local-stacks     # what got created
+make local-destroy    # tear the stack down
+make local-down       # stop MiniStack
+make local-reset      # wipe all MiniStack state without restarting it
 ```
 
-**LocalStack Configuration:**
+`make local-deploy` takes about a minute the first time (image pull) and a few seconds after that.
+It deploys the environment named `local`, whose config entry carries `"isLocal": true`.
 
-- **Setup:** Requires `.env` file with `LOCALSTACK_AUTH_TOKEN` (see `.env` in repo root)
-- **AWS Profile:** `localstack` (credentials: `test`/`test`)
-- **Account ID:** `000000000000` (LocalStack default)
-- **Region:** `eu-west-1` (configurable in docker-compose.yml)
-- **Endpoint:** `http://localhost:4566`
+**What runs locally.** MiniStack provisions real Docker containers for ECS tasks, so the app
+container actually runs — `docker ps` shows it, and `aws --endpoint-url=http://localhost:4566 ecs
+list-tasks --cluster local-ephemeral-ecs` lists the task. The VPC, subnets, security groups, ALB,
+target group, S3 bucket, KMS keys, IAM roles, log groups, alarms and dashboard are all created.
 
-**Testing locally:**
+**What local mode leaves out.** MiniStack's CloudFormation engine covers a subset of AWS, and it
+rejects a template up front if it contains a resource type it does not implement. `isLocal` trims
+the stack to what deploys:
 
-1. Deploy stack: `AWS_PROFILE=localstack npx cdk deploy`
-2. Verify S3: `aws s3api list-buckets --endpoint-url=http://localhost:4566 --profile localstack`
-3. Check CloudFormation: `aws cloudformation list-stacks --endpoint-url=http://localhost:4566 --profile localstack`
-4. Cleanup: `AWS_PROFILE=localstack npx cdk destroy`
+| Left out locally | Why |
+| --- | --- |
+| NAT gateway + EIP (private subnets become isolated) | no `AWS::EC2::NatGateway` / `AWS::EC2::EIP` |
+| VPC flow logs | no `AWS::EC2::FlowLog` |
+| RDS instance, its secret and subnet group | no `AWS::RDS::DBSubnetGroup`, which CDK always creates for a VPC-placed instance |
+| ALB → task registration (the ALB deploys but routes nowhere) | attaching makes CDK emit a standalone `AWS::EC2::SecurityGroupIngress` |
+| S3 auto-delete and default-SG restriction | Lambda-backed custom resources whose CloudFormation response never arrives |
 
-**Differences from AWS:**
+None of this affects a real AWS deploy — see the "leaves the AWS deploy untouched" test.
 
-- ✅ Useful for fast iteration and schema validation
-- ⚠️ LocalStack doesn't emulate all AWS services perfectly
-- ⚠️ Some features (IAM policies, CloudWatch metrics) have limited support
-- ✅ Great for testing infrastructure code before deploying to real AWS
-
-### 7. Test Locally (Without LocalStack)
+### 7. Synthesize Without Deploying
 
 ```bash
 # Typecheck
@@ -386,7 +378,7 @@ npm run cdk:destroy -- --context env=dev   # Clean up everything
 ### Local Development Flow
 
 1. **Make changes** to your application
-2. **Verify locally:** `make cdk-synth ENV=dev` (or with LocalStack)
+2. **Verify locally:** `make cdk-synth ENV=dev`, or deploy for real with `make local-deploy`
 3. **Test in AWS:** `make cdk-deploy ENV=dev`
 4. **When done:** `make cdk-destroy ENV=dev` (removes all resources)
 
@@ -429,6 +421,8 @@ Each environment can be configured with:
 - **region**: AWS region (us-east-1, us-west-2, eu-west-1, eu-west-2 — override the list with `VALID_REGIONS`)
 - **isProduction**: `true` for production (multi-AZ RDS, KMS encryption, termination protection)
 - **isPersistent**: `true` to retain resources on stack deletion (staging/prod)
+- **isLocal**: `true` for the MiniStack environment — trims the stack to what MiniStack's
+  CloudFormation engine implements (see [Deploy Locally with MiniStack](#6-deploy-locally-with-ministack-optional))
 
 Names come from the environment name alone: env `pr-42-a3f7b1c2` deploys the stack
 `pr-42-a3f7b1c2-ephemeral` and names its resources `pr-42-a3f7b1c2-ephemeral-*`. Because the stack

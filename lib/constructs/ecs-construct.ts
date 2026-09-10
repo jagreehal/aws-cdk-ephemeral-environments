@@ -7,7 +7,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
-import { VpcConstruct } from './vpc-construct';
+import { VpcConstruct, VPC_CIDR } from './vpc-construct';
 
 export interface EcsConstructProps {
   readonly namePrefix: string;
@@ -15,6 +15,8 @@ export interface EcsConstructProps {
   readonly vpcConstruct: VpcConstruct;
   readonly isProduction: boolean;
   readonly isEphemeral: boolean;
+  /** MiniStack has no standalone AWS::EC2::SecurityGroupIngress — see Config.isLocal. */
+  readonly isLocal?: boolean;
   readonly removalPolicy: cdk.RemovalPolicy;
   readonly appImage: string;
   readonly containerPort: number;
@@ -45,6 +47,7 @@ export class EcsConstruct extends Construct {
       vpcConstruct,
       isProduction,
       isEphemeral,
+      isLocal = false,
       removalPolicy,
       appImage,
       containerPort,
@@ -110,11 +113,16 @@ export class EcsConstruct extends Construct {
     this.loadBalancer = new elbv2.ApplicationLoadBalancer(this, 'LoadBalancer', {
       vpc,
       internetFacing: true,
-      securityGroup: this.albSecurityGroup,
+      // Locally the ALB shares the task group: attaching the service makes CDK open the target
+      // port from the load balancer, and a cross-group rule would be a standalone resource.
+      securityGroup: isLocal ? this.containerSecurityGroup : this.albSecurityGroup,
     });
 
+    // A security-group peer becomes a standalone AWS::EC2::SecurityGroupIngress resource; a CIDR
+    // peer is inlined into the group itself, which is all MiniStack supports. The literal range
+    // avoids an Fn::GetAtt on the VPC, which MiniStack's schema does not answer either.
     this.containerSecurityGroup.addIngressRule(
-      this.albSecurityGroup,
+      isLocal ? ec2.Peer.ipv4(VPC_CIDR) : this.albSecurityGroup,
       ec2.Port.tcp(containerPort),
       'Allow traffic from ALB',
     );
@@ -143,8 +151,13 @@ export class EcsConstruct extends Construct {
       circuitBreaker: { rollback: true },
     });
 
-    // Without this the target group stays empty and the ALB serves 503s.
-    this.service.attachToApplicationTargetGroup(this.targetGroup);
+    // Without this the target group stays empty and the ALB serves 503s. Attaching makes CDK open
+    // the target port from the load balancer, and a security-group-to-security-group rule is a
+    // standalone AWS::EC2::SecurityGroupIngress, which MiniStack does not implement — so locally
+    // the ALB deploys but routes nowhere. Reach the task through its own container instead.
+    if (!isLocal) {
+      this.service.attachToApplicationTargetGroup(this.targetGroup);
+    }
 
     this.loadBalancer
       .addListener('Listener', { port: 80 })

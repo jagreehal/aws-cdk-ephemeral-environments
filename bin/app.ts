@@ -12,6 +12,11 @@ const envName = app.node.tryGetContext('env') ?? 'dev';
 try {
   const config = loadConfigForEnv(envName, path.resolve(__dirname, '../config.json'));
 
+  // Also a Lambda-backed custom resource MiniStack cannot complete; off before the stack is built.
+  if (config.isLocal) {
+    app.node.setContext('@aws-cdk/aws-ec2:restrictDefaultSecurityGroup', false);
+  }
+
   new EphemeralStack(app, nameFor(envName), {
     env: { account: config.account, region: config.region },
     config,

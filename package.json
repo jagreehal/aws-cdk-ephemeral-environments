@@ -29,6 +29,7 @@
     "@typescript-eslint/eslint-plugin": "^8.70.0",
     "@typescript-eslint/parser": "^8.70.0",
     "aws-cdk": "^2.1141.0",
+    "aws-cdk-local": "^3.0.4",
     "eslint": "^10.10.0",
     "tsx": "^4.22.3",
     "typescript": "~6.0.3",

@@ -5,6 +5,13 @@
     "isProduction": false,
     "isPersistent": false
   },
+  "local": {
+    "account": "000000000000",
+    "region": "us-east-1",
+    "isProduction": false,
+    "isPersistent": false,
+    "isLocal": true
+  },
   "staging": {
     "account": "222222222222",
     "isPersistent": true

@@ -1,27 +1,35 @@
+# MiniStack: local AWS emulation on http://localhost:4566 — https://ministack.org/docs/iac#cdk
+# Deploy this CDK app against it with `make local-deploy` (see the Makefile).
 services:
-  localstack:
-    container_name: '${LOCALSTACK_DOCKER_NAME:-localstack-main}'
-    image: localstack/localstack:3.0.0
+  ministack:
+    # `:full` rather than the slim default: this stack needs the RDS drivers, and RDS/ECS are
+    # container-backed, hence the Docker socket below.
+    image: ministackorg/ministack:full
     ports:
-      - '127.0.0.1:4566:4566' # LocalStack Gateway
-      - '127.0.0.1:4510-4559:4510-4559' # external services port range
+      - '127.0.0.1:4566:4566'
     environment:
-      # LocalStack configuration: https://docs.localstack.cloud/references/configuration/
-      - DEBUG=${DEBUG:-0}
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
-      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}
-      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:-}
+      - MINISTACK_REGION=${AWS_REGION:-us-east-1}
+      - MINISTACK_ACCOUNT_ID=000000000000
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # CDK ships custom resources as bundled Lambdas (S3 auto-delete, default-SG restriction);
+      # the in-process executor has no AWS SDK stubs for them, the Docker one runs them for real.
+      - LAMBDA_EXECUTOR=docker
+      # State survives `docker compose restart`; `make local-reset` wipes it without a restart.
+      - PERSIST_STATE=1
+      - S3_PERSIST=1
+      - RDS_PERSIST=1
     volumes:
-      - '${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack'
+      - './data/state:/tmp/ministack-state'
+      - './data/s3:/tmp/ministack-data/s3'
       - '/var/run/docker.sock:/var/run/docker.sock'
-
-  stepfunctions:
-    image: amazon/aws-stepfunctions-local
-    ports:
-      - '8083:8083'
-    environment:
-      - AWS_ACCESS_KEY_ID=dummy
-      - AWS_SECRET_ACCESS_KEY=dummy
-      - AWS_DEFAULT_REGION=us-west-2
-    command: ['-jar', 'StepFunctionsLocal.jar']
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://localhost:4566/_ministack/health')",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6

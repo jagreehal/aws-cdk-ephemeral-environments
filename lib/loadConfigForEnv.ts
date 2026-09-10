@@ -6,6 +6,13 @@ export interface Config {
   isProduction: boolean;
   /** Keep resources on stack delete. Ephemeral envs (the default) are destroyed with the stack. */
   isPersistent?: boolean;
+  /**
+   * Deploying to MiniStack (http://localhost:4566) rather than AWS. Its CloudFormation engine
+   * covers most of this stack but not NAT gateways, EIPs, flow logs, standalone security-group
+   * ingress, RDS subnet groups or secret target attachments, so local mode trims to the subset
+   * that deploys: no NAT, no flow logs, inline SG rules, and no RDS. See README "Local".
+   */
+  isLocal?: boolean;
 }
 
 const ACCOUNT_PATTERN = /^\d{12}$/;

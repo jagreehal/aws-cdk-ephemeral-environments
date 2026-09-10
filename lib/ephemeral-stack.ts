@@ -37,6 +37,7 @@ export class EphemeralStack extends cdk.Stack {
     } = props;
 
     const isEphemeral = !config.isProduction && !config.isPersistent;
+    const isLocal = config.isLocal ?? false;
     const removalPolicy = isEphemeral ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN;
     const namePrefix = nameFor(envName);
 
@@ -45,12 +46,14 @@ export class EphemeralStack extends cdk.Stack {
     const vpcConstruct = new VpcConstruct(this, 'Vpc', {
       namePrefix,
       isProduction: config.isProduction,
+      isLocal,
     });
 
     const securityConstruct = new SecurityConstruct(this, 'Security', {
       namePrefix,
       isProduction: config.isProduction,
       removalPolicy,
+      isLocal,
     });
 
     const ecsConstruct = new EcsConstruct(this, 'Ecs', {
@@ -59,6 +62,7 @@ export class EphemeralStack extends cdk.Stack {
       vpcConstruct,
       isProduction: config.isProduction,
       isEphemeral,
+      isLocal,
       removalPolicy,
       appImage,
       containerPort,
@@ -67,16 +71,20 @@ export class EphemeralStack extends cdk.Stack {
       kmsKey: securityConstruct.kmsKey,
     });
 
-    const databaseConstruct = new DatabaseConstruct(this, 'Database', {
-      namePrefix,
-      vpcConstruct,
-      isProduction: config.isProduction,
-      isEphemeral,
-      removalPolicy,
-      dbInstanceClass,
-      dbAllocatedStorage,
-      ecsSecurityGroup: ecsConstruct.containerSecurityGroup,
-    });
+    // MiniStack has no AWS::RDS::DBSubnetGroup, which CDK always creates for a VPC-placed
+    // instance, so a local deploy runs the app without a database.
+    const databaseConstruct = isLocal
+      ? undefined
+      : new DatabaseConstruct(this, 'Database', {
+          namePrefix,
+          vpcConstruct,
+          isProduction: config.isProduction,
+          isEphemeral,
+          removalPolicy,
+          dbInstanceClass,
+          dbAllocatedStorage,
+          ecsSecurityGroup: ecsConstruct.containerSecurityGroup,
+        });
 
     new MonitoringConstruct(this, 'Monitoring', {
       namePrefix,
@@ -85,7 +93,7 @@ export class EphemeralStack extends cdk.Stack {
       alarmEmail,
       albName: ecsConstruct.loadBalancer.loadBalancerFullName,
       ecsClusterName: ecsConstruct.cluster.clusterName,
-      rdsIdentifier: databaseConstruct.database.instanceIdentifier,
+      rdsIdentifier: databaseConstruct?.database.instanceIdentifier,
     });
 
     this.outputReferences(ecsConstruct, databaseConstruct, securityConstruct);
@@ -104,7 +112,7 @@ export class EphemeralStack extends cdk.Stack {
 
   private outputReferences(
     ecs: EcsConstruct,
-    database: DatabaseConstruct,
+    database: DatabaseConstruct | undefined,
     security: SecurityConstruct,
   ): void {
     new cdk.CfnOutput(this, 'ClusterName', {
@@ -127,15 +135,17 @@ export class EphemeralStack extends cdk.Stack {
       description: 'Application Load Balancer URL',
     });
 
-    new cdk.CfnOutput(this, 'DatabaseEndpoint', {
-      value: database.database.dbInstanceEndpointAddress,
-      description: 'RDS Database Endpoint',
-    });
+    if (database) {
+      new cdk.CfnOutput(this, 'DatabaseEndpoint', {
+        value: database.database.dbInstanceEndpointAddress,
+        description: 'RDS Database Endpoint',
+      });
 
-    new cdk.CfnOutput(this, 'DatabaseSecretArn', {
-      value: database.secret.secretArn,
-      description: 'RDS Database Secret ARN',
-    });
+      new cdk.CfnOutput(this, 'DatabaseSecretArn', {
+        value: database.secret.secretArn,
+        description: 'RDS Database Secret ARN',
+      });
+    }
 
     new cdk.CfnOutput(this, 'StorageBucketName', {
       value: security.storageBucket.bucketName,

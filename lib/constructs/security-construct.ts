@@ -8,6 +8,8 @@ export interface SecurityConstructProps {
   readonly namePrefix: string;
   readonly isProduction: boolean;
   readonly removalPolicy: cdk.RemovalPolicy;
+  /** MiniStack cannot run CDK's auto-delete custom resource — see Config.isLocal. */
+  readonly isLocal?: boolean;
 }
 
 export class SecurityConstruct extends Construct {
@@ -17,7 +19,7 @@ export class SecurityConstruct extends Construct {
   constructor(scope: Construct, id: string, props: SecurityConstructProps) {
     super(scope, id);
 
-    const { namePrefix, isProduction, removalPolicy } = props;
+    const { namePrefix, isProduction, removalPolicy, isLocal = false } = props;
 
     this.kmsKey = new kms.Key(this, 'AppKmsKey', {
       alias: `alias/${namePrefix}-app-kms`,
@@ -27,13 +29,19 @@ export class SecurityConstruct extends Construct {
       pendingWindow: cdk.Duration.days(isProduction ? 30 : 7),
     });
 
-    this.storageBucket = this.createStorageBucket(removalPolicy, isProduction);
+    this.storageBucket = this.createStorageBucket(removalPolicy, isProduction, isLocal);
   }
 
-  private createStorageBucket(removalPolicy: cdk.RemovalPolicy, isProduction: boolean): s3.Bucket {
+  private createStorageBucket(
+    removalPolicy: cdk.RemovalPolicy,
+    isProduction: boolean,
+    isLocal: boolean,
+  ): s3.Bucket {
     const bucket = new s3.Bucket(this, 'StorageBucket', {
       removalPolicy,
-      autoDeleteObjects: removalPolicy === cdk.RemovalPolicy.DESTROY,
+      // Auto-delete is a Lambda-backed custom resource; MiniStack never returns its CloudFormation
+      // response, so the deploy hangs. Locally the bucket is thrown away with the container.
+      autoDeleteObjects: !isLocal && removalPolicy === cdk.RemovalPolicy.DESTROY,
       // Production encrypts with the app key created above; ephemeral envs use the free S3-managed
       // key rather than paying for a CMK that dies with the PR.
       ...(isProduction
