@@ -21,6 +21,8 @@ export interface EcsConstructProps {
   readonly appImage: string;
   readonly containerPort: number;
   readonly desiredCount: number;
+  /** Path the ALB polls. Must return 200 on `appImage`, or every target stays unhealthy. */
+  readonly healthCheckPath: string;
   /** Granted read/write to the task role. */
   readonly storageBucket: s3.IBucket;
   /** Granted encrypt/decrypt to the task role. */
@@ -52,6 +54,7 @@ export class EcsConstruct extends Construct {
       appImage,
       containerPort,
       desiredCount,
+      healthCheckPath,
       storageBucket,
       kmsKey,
     } = props;
@@ -132,7 +135,7 @@ export class EcsConstruct extends Construct {
       port: containerPort,
       targetType: elbv2.TargetType.IP,
       healthCheck: {
-        path: '/health',
+        path: healthCheckPath,
         healthyHttpCodes: '200',
         interval: cdk.Duration.seconds(30),
         timeout: cdk.Duration.seconds(5),

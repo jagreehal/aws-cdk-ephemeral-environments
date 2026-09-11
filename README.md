@@ -434,6 +434,9 @@ Each environment can be configured with:
 - **region**: AWS region (us-east-1, us-west-2, eu-west-1, eu-west-2 — override the list with `VALID_REGIONS`)
 - **isProduction**: `true` for production (multi-AZ RDS, KMS encryption, termination protection)
 - **isPersistent**: `true` to retain resources on stack deletion (staging/prod)
+- **healthCheckPath** (context, not config): path the ALB polls, default `/`. The default nginx
+  image answers `/` with a 200; point this at `/health` once your image serves one —
+  `make cdk-deploy ENV=dev` picks it up via `--context healthCheckPath=/health`
 - **isLocal**: `true` for the MiniStack environment — trims the stack to what MiniStack's
   CloudFormation engine implements (see [Deploy Locally with MiniStack](#6-deploy-locally-with-ministack-optional))
 
@@ -493,6 +496,28 @@ Visit AWS Console:
 # Close or merge the PR
 # ✅ GitHub Actions automatically cleans up resources
 ```
+
+## Upgrading From `EphemeralStack-<env>`
+
+Stacks used to be named `EphemeralStack-<env>`; they are now `<env>-ephemeral`, so that CI can find
+and destroy ephemeral stacks by their `pr-` / `branch-` prefix. **CloudFormation cannot rename a
+stack**, so a deploy after this change creates a new one and leaves the old one running — and the
+two will fight over fixed names (IAM roles, KMS aliases, the ECS cluster).
+
+Destroy the old stack before deploying the new one:
+
+```bash
+# Ephemeral environments: just delete them, CI will rebuild on the next push.
+aws cloudformation delete-stack --stack-name EphemeralStack-pr-42-a3f7b1c2
+
+# Persistent environments: check what is retained first — `isPersistent` keeps buckets and keys.
+aws cloudformation describe-stack-resources --stack-name EphemeralStack-prod
+aws cloudformation delete-stack --stack-name EphemeralStack-prod
+make cdk-deploy ENV=prod
+```
+
+Retained resources (S3 buckets, KMS keys in persistent environments) survive the delete and must be
+imported or removed by hand before the new stack can claim their names.
 
 ## Troubleshooting
 

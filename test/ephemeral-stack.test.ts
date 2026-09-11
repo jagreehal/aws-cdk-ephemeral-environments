@@ -162,6 +162,19 @@ describe('EphemeralStack', () => {
       });
     });
 
+    test('health-checks a path the default image actually answers', () => {
+      // nginx:alpine 404s on /health, which would leave every target unhealthy and the load
+      // balancer serving 503s — while the PR comment advertises the URL as live.
+      synth().hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
+        HealthCheckPath: '/',
+      });
+
+      synth({ healthCheckPath: '/health' }).hasResourceProperties(
+        'AWS::ElasticLoadBalancingV2::TargetGroup',
+        { HealthCheckPath: '/health' },
+      );
+    });
+
     test('registers the service with the ALB target group', () => {
       const template = synth();
 
@@ -171,7 +184,6 @@ describe('EphemeralStack', () => {
         ]),
       });
       template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
-        HealthCheckPath: '/health',
         TargetType: 'ip',
       });
       template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
@@ -215,6 +227,20 @@ describe('EphemeralStack', () => {
         MultiAZ: false,
         EnablePerformanceInsights: false,
       });
+    });
+
+    test('lets the task read the database credentials it is handed', () => {
+      const template = synth();
+      const policies = Object.values(template.findResources('AWS::IAM::Policy')) as Array<{
+        Properties: { PolicyDocument: { Statement: Array<{ Action: unknown }> } };
+      }>;
+      const actions = policies.flatMap((policy) =>
+        policy.Properties.PolicyDocument.Statement.flatMap((statement) =>
+          [statement.Action].flat(),
+        ),
+      );
+
+      expect(actions).toContain('secretsmanager:GetSecretValue');
     });
 
     test('rejects a malformed instance class at synth time', () => {

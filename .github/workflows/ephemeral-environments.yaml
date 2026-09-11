@@ -33,6 +33,11 @@ jobs:
     if: github.event_name != 'schedule' && github.event.action != 'closed'
     runs-on: ubuntu-latest
     environment: EphemeralDeployment
+    # Supersede an in-flight deploy for the same environment: pushing twice quickly would otherwise
+    # race on the stack and create two "environment is live" comments instead of editing one.
+    concurrency:
+      group: ephemeral-${{ github.event.pull_request.number || github.ref_name }}
+      cancel-in-progress: true
 
     steps:
       - uses: actions/checkout@v4
@@ -56,11 +61,14 @@ jobs:
 
       - name: Compute Environment Name
         id: names
+        # Refs reach the script through the environment, never interpolated into it: a branch name
+        # may contain quotes, and `'${{ ... }}'` in a run block would let it end the quoting.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          ENV_NAME=$(scripts/env-name.sh \
-            '${{ github.event_name }}' \
-            '${{ github.event.pull_request.head.ref || github.ref_name }}' \
-            '${{ github.event.pull_request.number }}')
+          ENV_NAME=$(scripts/env-name.sh "$EVENT_NAME" "$SOURCE_REF" "$PR_NUMBER")
           echo "env_name=$ENV_NAME" >> "$GITHUB_OUTPUT"
           echo "Deploying environment: $ENV_NAME"
 
@@ -79,11 +87,10 @@ jobs:
             const { readFileSync } = require('fs');
             const outputs = JSON.parse(readFileSync('cdk-outputs.json', 'utf8'));
             const [stack, values] = Object.entries(outputs)[0];
-            const rows = Object.entries(values)
-              .filter(([key]) => key !== 'LoadBalancerUrl')
-              .map(([key, value]) => `| ${key} | \`${value}\` |`)
-              .join('\n');
 
+            // Anyone who can see the pull request can see this comment, so it carries the URL and
+            // nothing else. Database endpoints, secret ARNs and role ARNs stay in the job summary,
+            // which needs repository access to read.
             const body = [
               '<!-- ephemeral-env -->',
               `### 🚀 Environment \`${process.env.ENV_NAME}\` is live`,
@@ -91,14 +98,8 @@ jobs:
               `**${values.LoadBalancerUrl}**`,
               '',
               `Stack \`${stack}\` in \`${process.env.AWS_REGION}\`. Redeployed on every push, destroyed when this PR closes.`,
-              '',
-              '<details><summary>Stack outputs</summary>',
-              '',
-              '| Output | Value |',
-              '| --- | --- |',
-              rows,
-              '',
-              '</details>',
+              'Full outputs are in the [workflow run summary](' +
+                `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}).`,
             ].join('\n');
 
             await require('./.github/scripts/sticky-comment.js')({ github, context, body });
@@ -120,6 +121,10 @@ jobs:
     if: (github.event_name == 'pull_request' && github.event.action == 'closed') || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     environment: EphemeralCleanup
+    # Queues behind a deploy for the same environment rather than cancelling it — a half-deployed
+    # stack still has to be destroyed. Never cancel-in-progress here.
+    concurrency:
+      group: ephemeral-${{ github.event.pull_request.number || github.ref_name }}
 
     steps:
       - uses: actions/checkout@v4
@@ -141,10 +146,11 @@ jobs:
       - name: Destroy This PR's Environment
         id: destroy
         if: github.event_name == 'pull_request'
+        env:
+          SOURCE_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          ENV_NAME=$(scripts/env-name.sh pull_request \
-            '${{ github.event.pull_request.head.ref }}' \
-            '${{ github.event.pull_request.number }}')
+          ENV_NAME=$(scripts/env-name.sh pull_request "$SOURCE_REF" "$PR_NUMBER")
           echo "Destroying environment: $ENV_NAME"
           echo "env_name=$ENV_NAME" >> "$GITHUB_OUTPUT"
           make cdk-destroy ENV="$ENV_NAME"

@@ -18,6 +18,12 @@ export interface EphemeralStackProps extends cdk.StackProps {
   desiredCount?: number;
   dbInstanceClass?: string;
   dbAllocatedStorage?: number;
+  /**
+   * Path the load balancer health-checks. Defaults to `/`, which the default nginx image answers
+   * with a 200 — point it at `/health` (or wherever) once `appImage` serves one, because a path
+   * that 404s leaves every target unhealthy and the URL serving 503s.
+   */
+  healthCheckPath?: string;
   alarmEmail?: string;
 }
 
@@ -33,6 +39,7 @@ export class EphemeralStack extends cdk.Stack {
       desiredCount = 2,
       dbInstanceClass = 'db.t3.micro',
       dbAllocatedStorage = 20,
+      healthCheckPath = '/',
       alarmEmail,
     } = props;
 
@@ -67,6 +74,7 @@ export class EphemeralStack extends cdk.Stack {
       appImage,
       containerPort,
       desiredCount,
+      healthCheckPath,
       storageBucket: securityConstruct.storageBucket,
       kmsKey: securityConstruct.kmsKey,
     });
@@ -85,6 +93,10 @@ export class EphemeralStack extends cdk.Stack {
           dbAllocatedStorage,
           ecsSecurityGroup: ecsConstruct.containerSecurityGroup,
         });
+
+    // The endpoint and secret ARN are stack outputs; without this the task cannot read the
+    // credentials they point at.
+    databaseConstruct?.secret.grantRead(ecsConstruct.taskRole);
 
     new MonitoringConstruct(this, 'Monitoring', {
       namePrefix,
