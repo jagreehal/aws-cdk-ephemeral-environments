@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Formatting and lint on what is actually being committed — fast enough to run every time.
+# The full gate (typecheck, tests, synth) is `make precheck`, which CI runs.
+#
+# Enabled by `npm install` (the prepare script points core.hooksPath here).
+# Skip a single commit with `git commit --no-verify`.
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+# Prettier decides which of these it owns (.prettierignore excludes cdk.out, markdown, lockfiles).
+formattable=$(echo "$staged" | grep -E '\.(ts|js|mjs|cjs|json|ya?ml)$' || true)
+if [ -n "$formattable" ]; then
+  if ! echo "$formattable" | xargs npx prettier --ignore-unknown --check; then
+    echo
+    echo "  Formatting: run 'npm run format' and stage the result."
+    exit 1
+  fi
+fi
+
+lintable=$(echo "$staged" | grep -E '^(bin|lib|test)/.*\.ts$' || true)
+if [ -n "$lintable" ]; then
+  echo "$lintable" | xargs npx eslint
+fi

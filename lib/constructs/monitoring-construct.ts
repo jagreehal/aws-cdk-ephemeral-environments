@@ -6,8 +6,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 export interface MonitoringConstructProps {
-  readonly prefix: string;
-  readonly stackEnvName: string;
+  readonly namePrefix: string;
   readonly isProduction: boolean;
   readonly removalPolicy: cdk.RemovalPolicy;
   readonly alarmEmail?: string;
@@ -15,6 +14,9 @@ export interface MonitoringConstructProps {
   readonly ecsClusterName?: string;
   readonly rdsIdentifier?: string;
 }
+
+/** Alarm when free storage drops below this. */
+const RDS_LOW_STORAGE_BYTES = 2 * 1024 ** 3;
 
 export class MonitoringConstruct extends Construct {
   public readonly dashboard: cloudwatch.Dashboard;
@@ -25,8 +27,7 @@ export class MonitoringConstruct extends Construct {
     super(scope, id);
 
     const {
-      prefix,
-      stackEnvName,
+      namePrefix,
       isProduction,
       removalPolicy,
       alarmEmail,
@@ -35,9 +36,28 @@ export class MonitoringConstruct extends Construct {
       rdsIdentifier,
     } = props;
 
-    this.logGroup = this.createLogGroup(prefix, stackEnvName, removalPolicy, isProduction);
-    this.topic = this.createAlarmTopic(prefix, stackEnvName, alarmEmail);
-    this.dashboard = this.createDashboard(prefix, stackEnvName, isProduction);
+    this.logGroup = new logs.LogGroup(this, 'MonitoringLogGroup', {
+      logGroupName: `/aws/ephemeral-envs/${namePrefix}`,
+      removalPolicy,
+      retention: isProduction ? logs.RetentionDays.SIX_MONTHS : logs.RetentionDays.ONE_WEEK,
+    });
+
+    this.topic = new sns.Topic(this, 'AlarmTopic', {
+      topicName: `${namePrefix}-alarms`,
+      displayName: `Alarms for ${namePrefix}`,
+    });
+
+    if (alarmEmail) {
+      new sns.Subscription(this, 'EmailSubscription', {
+        topic: this.topic,
+        endpoint: alarmEmail,
+        protocol: sns.SubscriptionProtocol.EMAIL,
+      });
+    }
+
+    this.dashboard = new cloudwatch.Dashboard(this, 'Dashboard', {
+      dashboardName: `${namePrefix}-dashboard`,
+    });
 
     if (albName) {
       this.addAlbWidgets(albName);
@@ -50,37 +70,6 @@ export class MonitoringConstruct extends Construct {
     if (rdsIdentifier) {
       this.addRdsWidgets(rdsIdentifier);
     }
-  }
-
-  private createLogGroup(prefix: string, stackEnvName: string, removalPolicy: cdk.RemovalPolicy, isProduction: boolean): logs.LogGroup {
-    return new logs.LogGroup(this, 'MonitoringLogGroup', {
-      logGroupName: `/aws/ephemeral-envs/${prefix}/${stackEnvName}`,
-      removalPolicy,
-      retention: isProduction ? logs.RetentionDays.SIX_MONTHS : logs.RetentionDays.ONE_WEEK,
-    });
-  }
-
-  private createAlarmTopic(prefix: string, stackEnvName: string, email?: string): sns.Topic {
-    const topic = new sns.Topic(this, 'AlarmTopic', {
-      topicName: `${prefix}-${stackEnvName}-alarms`,
-      displayName: `Alarms for ${prefix}-${stackEnvName}`,
-    });
-
-    if (email) {
-      new sns.Subscription(this, 'EmailSubscription', {
-        topic,
-        endpoint: email,
-        protocol: sns.SubscriptionProtocol.EMAIL,
-      });
-    }
-
-    return topic;
-  }
-
-  private createDashboard(prefix: string, stackEnvName: string, isProduction: boolean): cloudwatch.Dashboard {
-    return new cloudwatch.Dashboard(this, 'Dashboard', {
-      dashboardName: `${prefix}-${stackEnvName}-dashboard`,
-    });
   }
 
   private addAlbWidgets(albName: string): void {
@@ -140,7 +129,7 @@ export class MonitoringConstruct extends Construct {
 
   private addEcsWidgets(clusterName: string): void {
     const cpuUtilization = new cloudwatch.Metric({
-      metricName: 'CpuUtilization',
+      metricName: 'CPUUtilization',
       namespace: 'AWS/ECS',
       statistic: 'Average',
       period: cdk.Duration.minutes(5),
@@ -156,8 +145,8 @@ export class MonitoringConstruct extends Construct {
     });
 
     const runningTasks = new cloudwatch.Metric({
-      metricName: 'RunningTasksCount',
-      namespace: 'AWS/ECS',
+      metricName: 'RunningTaskCount',
+      namespace: 'ECS/ContainerInsights',
       statistic: 'Maximum',
       period: cdk.Duration.minutes(5),
       dimensionsMap: { ClusterName: clusterName },
@@ -224,7 +213,11 @@ export class MonitoringConstruct extends Construct {
     this.createRdsAlarms(rdsIdentifier, cpuUtilization, freeStorage);
   }
 
-  private createEcsAlarms(clusterName: string, cpuMetric: cloudwatch.Metric, memoryMetric: cloudwatch.Metric): void {
+  private createEcsAlarms(
+    clusterName: string,
+    cpuMetric: cloudwatch.Metric,
+    memoryMetric: cloudwatch.Metric,
+  ): void {
     const cpuAlarm = new cloudwatch.Alarm(this, 'EcsCpuAlarm', {
       metric: cpuMetric,
       threshold: 80,
@@ -263,7 +256,7 @@ export class MonitoringConstruct extends Construct {
 
     const storageAlarm = new cloudwatch.Alarm(this, 'RdsStorageAlarm', {
       metric: storageMetric,
-      threshold: 1024 * 1024 * 1024 * 1024,
+      threshold: RDS_LOW_STORAGE_BYTES,
       comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
       evaluationPeriods: 3,
       alarmDescription: 'RDS free storage is low',

@@ -1,42 +1,50 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
 import * as path from 'node:path';
-import { EphemeralStack } from '../lib/my-app-stack';
-import { loadConfigForEnv } from '../lib/loadConfigForEnv';
+import { EphemeralStack } from '../lib/ephemeral-stack';
+import { nameFor } from '../lib/constants';
+import { numberContext } from '../lib/context';
+import { loadConfigForEnv, type Config } from '../lib/loadConfigForEnv';
 
-async function main() {
-  const app = new cdk.App();
+const app = new cdk.App();
 
-  const envName = app.node.tryGetContext('env') ?? 'dev';
-  const appImage = app.node.tryGetContext('appImage') ?? 'public.ecr.aws/nginx/nginx:alpine';
-  const containerPort = app.node.tryGetContext('containerPort') ?? 80;
-  const desiredCount = app.node.tryGetContext('desiredCount') ?? 2;
-  const dbInstanceClass = app.node.tryGetContext('dbInstanceClass') ?? 'db.t3.micro';
-  const dbAllocatedStorage = app.node.tryGetContext('dbAllocatedStorage') ?? 20;
-  const alarmEmail = app.node.tryGetContext('alarmEmail');
-  const configPath = path.resolve(__dirname, '../config.json');
+const envName = app.node.tryGetContext('env') ?? 'dev';
 
-  try {
-    const config = await loadConfigForEnv(envName, configPath);
+let config: Config;
 
-    new EphemeralStack(app, `EphemeralStack-${envName}`, {
-      env: { account: config.account, region: config.region },
-      config,
-      stackEnvName: envName,
-      appImage,
-      containerPort,
-      desiredCount,
-      dbInstanceClass,
-      dbAllocatedStorage,
-      alarmEmail,
-      terminationProtection: config.isProduction,
-    });
-  } catch (error) {
-    console.error(`Failed to load config for environment '${envName}':`, error);
-    process.exit(1);
+try {
+  config = loadConfigForEnv(envName, path.resolve(__dirname, '../config.json'));
+} catch (error) {
+  // A config problem is a typo, not a crash: print what is wrong and what to do, not a stack trace
+  // through the CDK toolkit. Only config loading is caught here — anything thrown while building
+  // the stack is a real bug and keeps its trace.
+  if (!(error instanceof Error)) {
+    throw error;
   }
 
-  app.synth();
+  console.error(`\n  Cannot deploy environment '${envName}'\n`);
+  console.error(`  ${error.message}\n`);
+  console.error('  Fix config.json, or run `make setup` to add an environment for yourself.\n');
+  process.exit(1);
 }
 
-main();
+// Also a Lambda-backed custom resource MiniStack cannot complete; off before the stack is built.
+if (config.isLocal) {
+  app.node.setContext('@aws-cdk/aws-ec2:restrictDefaultSecurityGroup', false);
+}
+
+new EphemeralStack(app, nameFor(envName), {
+  env: { account: config.account, region: config.region },
+  config,
+  envName,
+  appImage: app.node.tryGetContext('appImage'),
+  containerPort: numberContext(app.node, 'containerPort'),
+  desiredCount: numberContext(app.node, 'desiredCount'),
+  dbInstanceClass: app.node.tryGetContext('dbInstanceClass'),
+  dbAllocatedStorage: numberContext(app.node, 'dbAllocatedStorage'),
+  healthCheckPath: app.node.tryGetContext('healthCheckPath'),
+  alarmEmail: app.node.tryGetContext('alarmEmail'),
+  terminationProtection: config.isProduction,
+});
+
+app.synth();

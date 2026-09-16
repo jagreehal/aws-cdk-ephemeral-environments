@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { RemovalPolicy } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import type { Config } from './loadConfigForEnv';
+import { nameFor } from './constants';
 import { VpcConstruct } from './constructs/vpc-construct';
 import { EcsConstruct } from './constructs/ecs-construct';
 import { DatabaseConstruct } from './constructs/database-construct';
@@ -10,12 +11,19 @@ import { MonitoringConstruct } from './constructs/monitoring-construct';
 
 export interface EphemeralStackProps extends cdk.StackProps {
   config: Config;
-  stackEnvName: string;
+  /** Environment name: `dev`, `prod`, or a CI-generated `pr-123-ab12` / `branch-foo-ab12`. */
+  envName: string;
   appImage?: string;
   containerPort?: number;
   desiredCount?: number;
   dbInstanceClass?: string;
   dbAllocatedStorage?: number;
+  /**
+   * Path the load balancer health-checks. Defaults to `/`, which the default nginx image answers
+   * with a 200 — point it at `/health` (or wherever) once `appImage` serves one, because a path
+   * that 404s leaves every target unhealthy and the URL serving 503s.
+   */
+  healthCheckPath?: string;
   alarmEmail?: string;
 }
 
@@ -25,71 +33,83 @@ export class EphemeralStack extends cdk.Stack {
 
     const {
       config,
-      stackEnvName,
+      envName,
       appImage = 'public.ecr.aws/nginx/nginx:alpine',
       containerPort = 80,
       desiredCount = 2,
       dbInstanceClass = 'db.t3.micro',
       dbAllocatedStorage = 20,
+      healthCheckPath = '/',
       alarmEmail,
     } = props;
 
     const isEphemeral = !config.isProduction && !config.isPersistent;
+    const isLocal = config.isLocal ?? false;
     const removalPolicy = isEphemeral ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN;
+    const namePrefix = nameFor(envName);
 
     this.applyRemovalPolicy(removalPolicy);
 
     const vpcConstruct = new VpcConstruct(this, 'Vpc', {
-      prefix: config.prefix,
-      stackEnvName,
+      namePrefix,
       isProduction: config.isProduction,
-      removalPolicy,
+      isLocal,
     });
 
     const securityConstruct = new SecurityConstruct(this, 'Security', {
-      prefix: config.prefix,
-      stackEnvName,
+      namePrefix,
       isProduction: config.isProduction,
       removalPolicy,
+      isLocal,
     });
 
     const ecsConstruct = new EcsConstruct(this, 'Ecs', {
-      prefix: config.prefix,
-      stackEnvName,
+      namePrefix,
+      envName,
       vpcConstruct,
       isProduction: config.isProduction,
       isEphemeral,
+      isLocal,
       removalPolicy,
       appImage,
       containerPort,
       desiredCount,
+      healthCheckPath,
+      storageBucket: securityConstruct.storageBucket,
+      kmsKey: securityConstruct.kmsKey,
     });
 
-    const databaseConstruct = new DatabaseConstruct(this, 'Database', {
-      prefix: config.prefix,
-      stackEnvName,
-      vpcConstruct,
-      isProduction: config.isProduction,
-      isEphemeral,
-      removalPolicy,
-      dbInstanceClass,
-      dbAllocatedStorage,
-      ecsSecurityGroup: ecsConstruct.containerSecurityGroup,
-    });
+    // MiniStack has no AWS::RDS::DBSubnetGroup, which CDK always creates for a VPC-placed
+    // instance, so a local deploy runs the app without a database.
+    const databaseConstruct = isLocal
+      ? undefined
+      : new DatabaseConstruct(this, 'Database', {
+          namePrefix,
+          vpcConstruct,
+          isProduction: config.isProduction,
+          isEphemeral,
+          removalPolicy,
+          dbInstanceClass,
+          dbAllocatedStorage,
+          ecsSecurityGroup: ecsConstruct.containerSecurityGroup,
+        });
+
+    // The endpoint and secret ARN are stack outputs; without this the task cannot read the
+    // credentials they point at.
+    databaseConstruct?.secret.grantRead(ecsConstruct.taskRole);
 
     new MonitoringConstruct(this, 'Monitoring', {
-      prefix: config.prefix,
-      stackEnvName,
+      namePrefix,
       isProduction: config.isProduction,
       removalPolicy,
       alarmEmail,
       albName: ecsConstruct.loadBalancer.loadBalancerFullName,
       ecsClusterName: ecsConstruct.cluster.clusterName,
-      rdsIdentifier: databaseConstruct.database.instanceIdentifier,
+      rdsIdentifier: databaseConstruct?.database.instanceIdentifier,
     });
 
     this.outputReferences(ecsConstruct, databaseConstruct, securityConstruct);
-    this.applyTags(config, stackEnvName, isEphemeral);
+    this.applyTags(config, envName, isEphemeral);
   }
 
   private applyRemovalPolicy(policy: RemovalPolicy): void {
@@ -104,7 +124,7 @@ export class EphemeralStack extends cdk.Stack {
 
   private outputReferences(
     ecs: EcsConstruct,
-    database: DatabaseConstruct,
+    database: DatabaseConstruct | undefined,
     security: SecurityConstruct,
   ): void {
     new cdk.CfnOutput(this, 'ClusterName', {
@@ -127,15 +147,17 @@ export class EphemeralStack extends cdk.Stack {
       description: 'Application Load Balancer URL',
     });
 
-    new cdk.CfnOutput(this, 'DatabaseEndpoint', {
-      value: database.database.dbInstanceEndpointAddress,
-      description: 'RDS Database Endpoint',
-    });
+    if (database) {
+      new cdk.CfnOutput(this, 'DatabaseEndpoint', {
+        value: database.database.dbInstanceEndpointAddress,
+        description: 'RDS Database Endpoint',
+      });
 
-    new cdk.CfnOutput(this, 'DatabaseSecretArn', {
-      value: database.secret.secretArn,
-      description: 'RDS Database Secret ARN',
-    });
+      new cdk.CfnOutput(this, 'DatabaseSecretArn', {
+        value: database.secret.secretArn,
+        description: 'RDS Database Secret ARN',
+      });
+    }
 
     new cdk.CfnOutput(this, 'StorageBucketName', {
       value: security.storageBucket.bucketName,
@@ -148,9 +170,9 @@ export class EphemeralStack extends cdk.Stack {
     });
   }
 
-  private applyTags(config: Config, stackEnvName: string, isEphemeral: boolean): void {
+  private applyTags(config: Config, envName: string, isEphemeral: boolean): void {
     const tags: Record<string, string> = {
-      Environment: stackEnvName,
+      Environment: envName,
       EnvironmentType: isEphemeral ? 'Ephemeral' : 'Persistent',
       ManagedBy: 'CDK',
       Project: 'EphemeralEnvironments',

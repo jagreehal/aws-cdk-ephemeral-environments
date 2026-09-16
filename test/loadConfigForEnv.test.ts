@@ -1,248 +1,130 @@
-import { loadConfigForEnv } from '../lib/loadConfigForEnv';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { loadConfigForEnv } from '../lib/loadConfigForEnv';
 
-jest.mock('node:fs');
+vi.mock('node:fs');
+
+const configPath = '/test/config.json';
+
+const configFile = {
+  default: {
+    account: '111111111111',
+    region: 'us-east-1',
+    isProduction: false,
+    isPersistent: false,
+  },
+  staging: {
+    account: '222222222222',
+    isPersistent: true,
+  },
+  prod: {
+    account: '333333333333',
+    isProduction: true,
+    isPersistent: true,
+  },
+};
+
+function givenConfigFile(contents: unknown = configFile): void {
+  vi.mocked(fs.readFileSync).mockReturnValue(
+    typeof contents === 'string' ? contents : JSON.stringify(contents),
+  );
+}
+
+const originalEnv = { ...process.env };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  delete process.env.CDK_DEFAULT_ACCOUNT;
+  delete process.env.VALID_REGIONS;
+});
+
+afterEach(() => {
+  process.env = { ...originalEnv };
+});
 
 describe('loadConfigForEnv', () => {
-  const mockFs = fs as jest.Mocked<typeof fs>;
-  const configPath = '/test/config.json';
+  test('merges a named environment over the defaults', () => {
+    givenConfigFile();
 
-  const validConfig = {
-    dev: {
-      account: '123456789012',
-      region: 'us-east-1',
-      isProduction: false,
-      prefix: 'dev',
-      isPersistent: false,
-    },
-    staging: {
-      account: '123456789012',
-      region: 'us-east-1',
-      isProduction: false,
-      prefix: 'stage',
-      isPersistent: true,
-    },
-    prod: {
-      account: '123456789012',
+    expect(loadConfigForEnv('prod', configPath)).toEqual({
+      account: '333333333333',
       region: 'us-east-1',
       isProduction: true,
-      prefix: 'prod',
       isPersistent: true,
-    },
-  };
-
-  beforeEach(() => {
-    jest.clearAllMocks();
+    });
+    expect(fs.readFileSync).toHaveBeenCalledWith(configPath, 'utf-8');
   });
 
-  describe('successful config loading', () => {
-    test('loads valid dev config', async () => {
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(validConfig));
+  test('falls back to the defaults for an unknown (ephemeral) environment', () => {
+    givenConfigFile();
 
-      const config = await loadConfigForEnv('dev', configPath);
+    const config = loadConfigForEnv('pr-123-ab12cd34', configPath);
 
-      expect(config).toEqual(validConfig.dev);
-      expect(mockFs.readFileSync).toHaveBeenCalledWith(configPath, 'utf-8');
-    });
-
-    test('loads valid staging config', async () => {
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(validConfig));
-
-      const config = await loadConfigForEnv('staging', configPath);
-
-      expect(config).toEqual(validConfig.staging);
-    });
-
-    test('loads valid prod config', async () => {
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(validConfig));
-
-      const config = await loadConfigForEnv('prod', configPath);
-
-      expect(config).toEqual(validConfig.prod);
-    });
+    expect(config).toEqual(configFile.default);
+    expect(config.isProduction).toBe(false);
   });
 
-  describe('config validation', () => {
-    test('throws error for missing environment', async () => {
-      mockFs.readFileSync.mockReturnValue(JSON.stringify(validConfig));
+  test('prefers CDK_DEFAULT_ACCOUNT over the account in the file', () => {
+    givenConfigFile();
+    process.env.CDK_DEFAULT_ACCOUNT = '999999999999';
 
-      await expect(loadConfigForEnv('nonexistent', configPath)).rejects.toThrow(
-        "Configuration for environment 'nonexistent' not found",
-      );
-    });
-
-    test('throws error for missing account', async () => {
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({
-          dev: {
-            account: '',
-            region: 'us-east-1',
-            isProduction: false,
-            prefix: 'dev',
-          },
-        }),
-      );
-
-      await expect(loadConfigForEnv('dev', configPath)).rejects.toThrow(
-        'Configuration account is missing or empty',
-      );
-    });
-
-    test('throws error for invalid account format', async () => {
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({
-          dev: {
-            account: 'invalid',
-            region: 'us-east-1',
-            isProduction: false,
-            prefix: 'dev',
-          },
-        }),
-      );
-
-      await expect(loadConfigForEnv('dev', configPath)).rejects.toThrow(
-        'Invalid AWS account ID: must be a 12-digit numeric string',
-      );
-    });
-
-    test('throws error for missing region', async () => {
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({
-          dev: {
-            account: '123456789012',
-            region: '',
-            isProduction: false,
-            prefix: 'dev',
-          },
-        }),
-      );
-
-      await expect(loadConfigForEnv('dev', configPath)).rejects.toThrow(
-        'Configuration region is missing or empty',
-      );
-    });
-
-    test('throws error for unsupported region', async () => {
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({
-          dev: {
-            account: '123456789012',
-            region: 'ap-south-1',
-            isProduction: false,
-            prefix: 'dev',
-          },
-        }),
-      );
-
-      await expect(loadConfigForEnv('dev', configPath)).rejects.toThrow(
-        "Unsupported region 'ap-south-1'",
-      );
-    });
-
-    test('allows custom regions via VALID_REGIONS env var', async () => {
-      process.env.VALID_REGIONS = 'us-east-1,eu-west-1,ap-south-1';
-
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({
-          dev: {
-            account: '123456789012',
-            region: 'ap-south-1',
-            isProduction: false,
-            prefix: 'dev',
-          },
-        }),
-      );
-
-      const config = await loadConfigForEnv('dev', configPath);
-
-      expect(config.region).toBe('ap-south-1');
-
-      delete process.env.VALID_REGIONS;
-    });
+    expect(loadConfigForEnv('dev', configPath).account).toBe('999999999999');
   });
 
-  describe('file operations', () => {
-    test('throws error for missing config file', async () => {
-      mockFs.readFileSync.mockImplementation(() => {
-        throw new Error('ENOENT: no such file');
-      });
+  test('throws when no entry and no defaults exist', () => {
+    givenConfigFile({ prod: configFile.prod });
 
-      await expect(loadConfigForEnv('dev', configPath)).rejects.toThrow(
-        'Failed to read configuration file',
-      );
-    });
-
-    test('throws error for invalid JSON', async () => {
-      mockFs.readFileSync.mockReturnValue('invalid json {{{');
-
-      await expect(loadConfigForEnv('dev', configPath)).rejects.toThrow(
-        'Configuration file contains invalid JSON',
-      );
-    });
+    expect(() => loadConfigForEnv('dev', configPath)).toThrow(
+      "No configuration for environment 'dev'",
+    );
   });
 
-  describe('SSM configuration', () => {
-    test('loads config with useSsmConfig flag', async () => {
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({
-          dev: {
-            account: '123456789012',
-            region: 'us-east-1',
-            isProduction: false,
-            prefix: 'dev',
-            useSsmConfig: true,
-          },
-        }),
-      );
+  test('rejects an account that is not 12 digits', () => {
+    givenConfigFile({ default: { ...configFile.default, account: 'not-an-account' } });
 
-      const config = await loadConfigForEnv('dev', configPath);
-
-      expect(config.useSsmConfig).toBe(true);
-    });
+    expect(() => loadConfigForEnv('dev', configPath)).toThrow('Invalid AWS account ID');
   });
 
-  describe('account ID from environment variable', () => {
-    test('uses SSM_ACCOUNT_DEV env var when valid', async () => {
-      process.env.SSM_ACCOUNT_DEV = '999888777666';
+  test('rejects a missing account', () => {
+    givenConfigFile({ default: { region: 'us-east-1' } });
 
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({
-          dev: {
-            account: 'invalid',
-            region: 'us-east-1',
-            isProduction: false,
-            prefix: 'dev',
-          },
-        }),
-      );
+    expect(() => loadConfigForEnv('dev', configPath)).toThrow('Configuration account is missing');
+  });
 
-      const config = await loadConfigForEnv('dev', configPath);
+  test('rejects a missing region', () => {
+    givenConfigFile({ default: { account: '111111111111' } });
 
-      expect(config.account).toBe('999888777666');
+    expect(() => loadConfigForEnv('dev', configPath)).toThrow('Configuration region is missing');
+  });
 
-      delete process.env.SSM_ACCOUNT_DEV;
+  test('rejects a region outside the allowed list', () => {
+    givenConfigFile({ default: { ...configFile.default, region: 'ap-south-1' } });
+
+    expect(() => loadConfigForEnv('dev', configPath)).toThrow("Unsupported region 'ap-south-1'");
+  });
+
+  test('honours a VALID_REGIONS override', () => {
+    givenConfigFile({ default: { ...configFile.default, region: 'ap-south-1' } });
+    process.env.VALID_REGIONS = 'ap-south-1, eu-west-1';
+
+    expect(loadConfigForEnv('dev', configPath).region).toBe('ap-south-1');
+  });
+
+  test('reports invalid JSON with the file path', () => {
+    givenConfigFile('{ not json');
+
+    expect(() => loadConfigForEnv('dev', configPath)).toThrow(
+      `Configuration file contains invalid JSON: ${configPath}`,
+    );
+  });
+
+  test('reports an unreadable file', () => {
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw new Error('ENOENT: no such file or directory');
     });
 
-    test('uses SSM_ACCOUNT_STAGING env var for staging', async () => {
-      process.env.SSM_ACCOUNT_STAGING = '111222333444';
-
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({
-          staging: {
-            account: 'invalid',
-            region: 'us-east-1',
-            isProduction: false,
-            prefix: 'stage',
-          },
-        }),
-      );
-
-      const config = await loadConfigForEnv('staging', configPath);
-
-      expect(config.account).toBe('111222333444');
-
-      delete process.env.SSM_ACCOUNT_STAGING;
-    });
+    expect(() => loadConfigForEnv('dev', configPath)).toThrow(
+      'Failed to read configuration file at /test/config.json: ENOENT',
+    );
   });
 });

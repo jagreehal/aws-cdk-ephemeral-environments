@@ -17,7 +17,11 @@ SYSTEM_USER=$(whoami)
 GIT_USER=$(git config user.name 2>/dev/null || echo "")
 GH_USER=$(gh api user --jq '.login' 2>/dev/null || echo "")
 
-PREFILL_USER="${GH_USER:-$GIT_USER:-$SYSTEM_USER}"
+PREFILL_USER="$GH_USER"
+[ -z "$PREFILL_USER" ] && PREFILL_USER="$GIT_USER"
+[ -z "$PREFILL_USER" ] && PREFILL_USER="$SYSTEM_USER"
+# Stack names allow letters, digits and hyphens only, so a git name like "Jag Reehal" needs a scrub.
+PREFILL_USER=$(echo "$PREFILL_USER" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/-$//')
 
 read -p "Environment name (prefilled: user-$PREFILL_USER): " ENV_INPUT
 ENV_NAME="${ENV_INPUT:-user-$PREFILL_USER}"
@@ -45,12 +49,12 @@ echo "📋 Summary:"
 echo "  Environment: $ENV_NAME"
 echo "  Account:     $AWS_ACCOUNT"
 echo "  Region:      $AWS_REGION_FINAL"
-echo "  Prefix:      $ENV_NAME (used in stack names)"
+echo "  Stack:       $ENV_NAME-ephemeral"
 echo ""
 
-read -p "Create this configuration? (y/n) " -n 1 -r
+read -p "Create this configuration? (Y/n) " -n 1 -r
 echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+if [[ $REPLY =~ ^[Nn]$ ]]; then
   echo "Cancelled."
   exit 0
 fi
@@ -58,9 +62,9 @@ fi
 # Check if config already exists
 if jq -e ".$ENV_NAME" "$CONFIG_FILE" >/dev/null 2>&1; then
   echo "⚠️  Configuration for '$ENV_NAME' already exists in config.json"
-  read -p "Overwrite? (y/n) " -n 1 -r
+  read -p "Overwrite? (Y/n) " -n 1 -r
   echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+  if [[ $REPLY =~ ^[Nn]$ ]]; then
     echo "Cancelled."
     exit 0
   fi
@@ -75,9 +79,7 @@ NEW_CONFIG=$(jq \
     "account": $account,
     "region": $region,
     "isProduction": false,
-    "prefix": $env,
-    "isPersistent": false,
-    "useSsmConfig": false
+    "isPersistent": false
   }' "$CONFIG_FILE")
 
 echo "$NEW_CONFIG" > "$CONFIG_FILE"
@@ -94,32 +96,15 @@ else
 fi
 
 echo ""
-echo "📦 Testing LocalStack (optional)..."
-
-if docker ps 2>/dev/null | grep -q localstack-main; then
-  if aws s3api list-buckets --endpoint-url=http://localhost:4566 --profile localstack >/dev/null 2>&1; then
-    echo "✅ LocalStack is running and accessible"
-  else
-    echo "⚠️  LocalStack is running but not responding"
-  fi
-else
-  echo "ℹ️  LocalStack not running. To start: docker-compose up -d"
-fi
-
-echo ""
 echo "✨ Setup complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Deploy to AWS:"
-echo "     npx cdk deploy --context env=$ENV_NAME"
+echo "  Deploy to AWS:       make cdk-deploy ENV=$ENV_NAME"
+echo "  Preview changes:     make cdk-diff ENV=$ENV_NAME"
+echo "  Clean up when done:  make cdk-destroy ENV=$ENV_NAME"
 echo ""
-echo "  2. Or test with LocalStack:"
-echo "     docker-compose up -d"
-echo "     AWS_PROFILE=localstack npx cdk deploy --context env=$ENV_NAME"
+echo "  No AWS account handy? MiniStack runs the whole stack locally:"
+echo "                       make local-deploy"
 echo ""
-echo "  3. View deployment:"
-echo "     make cdk-list"
-echo ""
-echo "  4. Cleanup when done:"
-echo "     npx cdk destroy --context env=$ENV_NAME"
+echo "  Run 'make' to see everything."
 echo ""

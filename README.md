@@ -4,7 +4,23 @@ Automatically create and destroy temporary AWS environments for pull requests us
 
 ## Overview
 
-This project enables you to spin up isolated, ephemeral AWS environments for each pull request and automatically tear them down when the PR is closed. Each environment includes an S3 bucket configured with appropriate security settings, encryption, and removal policies.
+This project enables you to spin up isolated, ephemeral AWS environments for each pull request and automatically tear them down when the PR is closed. Each environment is a VPC with an ECS Fargate service behind an Application Load Balancer, an RDS Postgres instance, an S3 bucket and KMS keys, plus CloudWatch alarms and a dashboard.
+
+```bash
+make                # every target, grouped, with the current ENV
+make local-deploy   # the whole stack on your laptop — no AWS account (MiniStack)
+```
+
+Deploying to AWS instead:
+
+```bash
+make setup                    # one-time: adds an environment for you to config.json
+make cdk-deploy ENV=user-you  # prints the load balancer URL when it finishes
+make cdk-destroy ENV=user-you
+```
+
+Or open a pull request: CI deploys an environment and comments its URL on the PR, redeploys on
+every push, and destroys it when the PR closes.
 
 **Key features:**
 
@@ -13,13 +29,14 @@ This project enables you to spin up isolated, ephemeral AWS environments for eac
 - 🔐 **OIDC authentication** (no long-lived AWS credentials)
 - 📦 **Environment-aware configuration** (dev/staging/prod)
 - 💾 **Persistent vs ephemeral** resource handling
+- 💻 **Local deploys** against [MiniStack](https://ministack.org) — no AWS account needed
 - 🏗️ **Infrastructure as Code** using AWS CDK and TypeScript
 
 ## Quick Start
 
 ### 1. Prerequisites
 
-- **Node.js** 20.x or later
+- **Node.js** 22.x or later
 - **AWS CLI** v2
 - **Git** (with `user.name` configured)
 - **GitHub CLI** (optional, for auto-prefilling GitHub username)
@@ -32,7 +49,7 @@ This project enables you to spin up isolated, ephemeral AWS environments for eac
 git clone <repo-url>
 cd aws-cdk-ephemeral-environments
 npm ci
-npm run build
+npm run precheck   # typecheck, test, synth
 ```
 
 ### 3. Quick Setup for New Team Members
@@ -40,14 +57,14 @@ npm run build
 Let the setup script prefill everything from your system and AWS profile:
 
 ```bash
-./scripts/setup-local-env.sh
+make setup
 ```
 
 This script intelligently prefills:
 
 - **Username** from `whoami` → `git config user.name` → GitHub CLI
 - **AWS Account & Region** from your current AWS credentials
-- **Environment name** as the stack prefix (e.g., `user-jreehal`)
+- **Environment name**, which names the stack and every resource in it (e.g. `user-jreehal`)
 
 Then confirm or override any value:
 
@@ -217,8 +234,8 @@ The stack creates a new VPC with:
 
 - 3 AZs (prod) or 2 AZs (ephemeral)
 - Public, Private (with NAT), and Isolated subnets
-- VPC endpoints for S3, DynamoDB, ECR, CloudWatch, Secrets Manager, and RDS
-- VPC Flow Logs with 90-day retention
+- Gateway VPC endpoints for S3 and DynamoDB (interface endpoints are billed per AZ per hour, so an env that lives for one PR uses the NAT gateway instead)
+- VPC Flow Logs with 1-week retention
 
 #### Security Best Practices
 
@@ -262,79 +279,68 @@ Update `config.json` with your AWS account IDs:
 
 ```json
 {
-  "dev": {
+  "default": {
     "account": "YOUR_DEV_ACCOUNT_ID",
     "region": "us-east-1",
     "isProduction": false,
-    "prefix": "dev"
+    "isPersistent": false
   },
   "staging": {
     "account": "YOUR_STAGING_ACCOUNT_ID",
-    "region": "us-east-1",
-    "isProduction": false,
-    "prefix": "stage",
     "isPersistent": true
   },
   "prod": {
     "account": "YOUR_PROD_ACCOUNT_ID",
-    "region": "us-east-1",
     "isProduction": true,
-    "prefix": "prod",
     "isPersistent": true
   }
 }
 ```
 
-### 6. Test Locally with LocalStack (Optional)
+Named entries merge over `default`, and **any environment without an entry gets `default`** — which
+is how every CI-generated `pr-123-ab12` environment resolves without touching this file.
+`CDK_DEFAULT_ACCOUNT` overrides the account, so CI never needs a real account ID committed here.
 
-For fast local testing without deploying to AWS:
+### 6. Deploy Locally with MiniStack (Optional)
+
+[MiniStack](https://ministack.org) emulates AWS on `http://localhost:4566`, so the whole stack can
+be deployed on a laptop with no AWS account. `cdklocal` is the CDK wrapper that points the toolkit
+at it ([docs](https://ministack.org/docs/iac#cdk)).
 
 ```bash
-# Start LocalStack and Step Functions (requires Docker)
-docker-compose up -d
-
-# Verify LocalStack is ready
-aws s3api list-buckets --endpoint-url=http://localhost:4566 --profile localstack
-
-# Build and deploy to LocalStack
-npm run build
-AWS_PROFILE=localstack npx cdk deploy --require-approval never
-
-# Test your deployed resources
-aws s3api list-buckets --endpoint-url=http://localhost:4566 --profile localstack
-aws s3api head-bucket --bucket <bucket-name> --endpoint-url=http://localhost:4566 --profile localstack
-
-# Destroy stack and cleanup
-AWS_PROFILE=localstack npx cdk destroy
-docker-compose down
+make local-deploy     # starts MiniStack, bootstraps, deploys the `local` environment
+make local-stacks     # what got created
+make local-destroy    # tear the stack down
+make local-down       # stop MiniStack
+make local-reset      # wipe all MiniStack state without restarting it
 ```
 
-**LocalStack Configuration:**
+`make local-deploy` takes about a minute the first time (image pull) and a few seconds after that.
+It deploys the environment named `local`, whose config entry carries `"isLocal": true`.
 
-- **Setup:** Requires `.env` file with `LOCALSTACK_AUTH_TOKEN` (see `.env` in repo root)
-- **AWS Profile:** `localstack` (credentials: `test`/`test`)
-- **Account ID:** `000000000000` (LocalStack default)
-- **Region:** `eu-west-1` (configurable in docker-compose.yml)
-- **Endpoint:** `http://localhost:4566`
+**What runs locally.** MiniStack provisions real Docker containers for ECS tasks, so the app
+container actually runs — `docker ps` shows it, and `aws --endpoint-url=http://localhost:4566 ecs
+list-tasks --cluster local-ephemeral-ecs` lists the task. The VPC, subnets, security groups, ALB,
+target group, S3 bucket, KMS keys, IAM roles, log groups, alarms and dashboard are all created.
 
-**Testing locally:**
+**What local mode leaves out.** MiniStack's CloudFormation engine covers a subset of AWS, and it
+rejects a template up front if it contains a resource type it does not implement. `isLocal` trims
+the stack to what deploys:
 
-1. Deploy stack: `AWS_PROFILE=localstack npx cdk deploy`
-2. Verify S3: `aws s3api list-buckets --endpoint-url=http://localhost:4566 --profile localstack`
-3. Check CloudFormation: `aws cloudformation list-stacks --endpoint-url=http://localhost:4566 --profile localstack`
-4. Cleanup: `AWS_PROFILE=localstack npx cdk destroy`
+| Left out locally | Why |
+| --- | --- |
+| NAT gateway + EIP (private subnets become isolated) | no `AWS::EC2::NatGateway` / `AWS::EC2::EIP` |
+| VPC flow logs | no `AWS::EC2::FlowLog` |
+| RDS instance, its secret and subnet group | no `AWS::RDS::DBSubnetGroup`, which CDK always creates for a VPC-placed instance |
+| ALB → task registration (the ALB deploys but routes nowhere) | attaching makes CDK emit a standalone `AWS::EC2::SecurityGroupIngress` |
+| S3 auto-delete and default-SG restriction | Lambda-backed custom resources whose CloudFormation response never arrives |
 
-**Differences from AWS:**
+None of this affects a real AWS deploy — see the "leaves the AWS deploy untouched" test.
 
-- ✅ Useful for fast iteration and schema validation
-- ⚠️ LocalStack doesn't emulate all AWS services perfectly
-- ⚠️ Some features (IAM policies, CloudWatch metrics) have limited support
-- ✅ Great for testing infrastructure code before deploying to real AWS
-
-### 7. Test Locally (Without LocalStack)
+### 7. Synthesize Without Deploying
 
 ```bash
-# Build the TypeScript
+# Typecheck
 npm run build
 
 # Synthesize CloudFormation for dev environment
@@ -348,44 +354,43 @@ make cdk-synth ENV=dev
 
 ### Available Commands
 
-Use the **Makefile** for convenient DX:
+`make` on its own lists every target, grouped, and shows which environment it will act on:
 
 ```bash
-# Install dependencies
-make install
-
-# Build TypeScript
-make build
-
-# Watch TypeScript for changes
-make watch
-
-# CDK operations
-make cdk-bootstrap ENV=dev           # Bootstrap AWS account
-make cdk-deploy ENV=dev              # Deploy stack
-make cdk-destroy ENV=dev             # Destroy stack (removes all resources)
-make cdk-diff ENV=dev                # Preview changes
-make cdk-synth ENV=dev               # Generate CloudFormation
-make cdk-list                        # List stacks
-make list-envs                       # List ephemeral (PR) environments
+make                       # the list
+make ENV=pr-42-a3f7b1c2    # the list, with that environment as the target
 ```
 
-Or use **npm scripts** directly:
+Everything routes through it — `make setup`, `make test`, `make precheck`, `make local-deploy`,
+`make cdk-deploy ENV=…`, `make outputs`, `make list-envs`. The npm scripts underneath still work if
+you prefer them:
 
 ```bash
-npm run cdk:bootstrap -- --context env=dev
 npm run cdk:deploy -- --context env=dev
-npm run cdk:destroy -- --context env=dev   # Clean up everything
+npm run cdk:destroy -- --context env=dev
 ```
 
 **Tip:** `make cdk-destroy ENV=dev` safely removes all resources including S3 buckets (for ephemeral environments) or retains them (for persistent environments per config).
+
+### Formatting and the pre-commit hook
+
+Prettier owns formatting (`.prettierrc.json`); markdown and lockfiles are left alone
+(`.prettierignore`). `npm install` points `core.hooksPath` at `.githooks`, so a pre-commit hook
+checks formatting and lints **only the staged files** — a second or two, not the full suite. The
+full gate stays `make precheck` (format, lint, typecheck, tests, synth), which is what CI runs.
+
+```bash
+npm run format        # fix formatting
+npm run format:check  # what the hook checks
+git commit --no-verify  # skip the hook for one commit
+```
 
 ## How It Works
 
 ### Local Development Flow
 
 1. **Make changes** to your application
-2. **Verify locally:** `make cdk-synth ENV=dev` (or with LocalStack)
+2. **Verify locally:** `make cdk-synth ENV=dev`, or deploy for real with `make local-deploy`
 3. **Test in AWS:** `make cdk-deploy ENV=dev`
 4. **When done:** `make cdk-destroy ENV=dev` (removes all resources)
 
@@ -397,14 +402,15 @@ The Makefile makes it easy to iterate: build → deploy → test → destroy.
 2. **Open a Pull Request**
 3. ✅ **GitHub Actions automatically:**
    - Builds your code
-   - Creates a new AWS stack: `MyAppStack-pr-<number>-<hash>`
+   - Typechecks, tests and synths, then creates the stack `pr-<number>-<hash>-ephemeral`
    - Deploys to your AWS account
 4. **Test your ephemeral environment** using the deployed S3 bucket and resources
 5. **Close the PR**
 6. ✅ **GitHub Actions automatically:**
    - Deletes the temporary CloudFormation stack
    - Removes all ephemeral resources
-7. **Scheduled cleanup** (daily 3 AM ET) deletes any orphaned PR stacks
+   - Edits the PR comment to say the environment is gone, so no dead link is left behind
+7. **Scheduled cleanup** (daily 03:00 UTC) deletes any orphaned `pr-` / `branch-` stacks
 
 ### Environment Names
 
@@ -424,11 +430,20 @@ Ephemeral environments are named based on the PR and branch:
 
 Each environment can be configured with:
 
-- **account**: 12-digit AWS account ID
-- **region**: AWS region (us-east-1, us-west-2, eu-west-1, eu-west-2)
-- **isProduction**: Set to `true` for production (enables KMS encryption, stricter security)
-- **prefix**: Resource name prefix (used in bucket names, tags)
-- **isPersistent**: If `true`, resources are retained on stack deletion (for prod/staging)
+- **account**: 12-digit AWS account ID (overridden by `CDK_DEFAULT_ACCOUNT` when set)
+- **region**: AWS region (us-east-1, us-west-2, eu-west-1, eu-west-2 — override the list with `VALID_REGIONS`)
+- **isProduction**: `true` for production (multi-AZ RDS, KMS encryption, termination protection)
+- **isPersistent**: `true` to retain resources on stack deletion (staging/prod)
+- **healthCheckPath** (context, not config): path the ALB polls, default `/`. The default nginx
+  image answers `/` with a 200; point this at `/health` once your image serves one —
+  `make cdk-deploy ENV=dev` picks it up via `--context healthCheckPath=/health`
+- **isLocal**: `true` for the MiniStack environment — trims the stack to what MiniStack's
+  CloudFormation engine implements (see [Deploy Locally with MiniStack](#6-deploy-locally-with-ministack-optional))
+
+Names come from the environment name alone: env `pr-42-a3f7b1c2` deploys the stack
+`pr-42-a3f7b1c2-ephemeral` and names its resources `pr-42-a3f7b1c2-ephemeral-*`. Because the stack
+name starts with the environment name, `make list-envs` and the cleanup workflow can find every
+ephemeral stack by its `pr-` / `branch-` prefix.
 
 ### Resource Behavior
 
@@ -471,7 +486,7 @@ git push -u origin feature/my-feature
 
 Visit AWS Console:
 
-- **CloudFormation:** View your stack `MyAppStack-pr-<number>-<hash>`
+- **CloudFormation:** View your stack `pr-<number>-<hash>-ephemeral`
 - **S3:** Access your ephemeral bucket
 - **CloudWatch:** Monitor deployment
 
@@ -481,6 +496,28 @@ Visit AWS Console:
 # Close or merge the PR
 # ✅ GitHub Actions automatically cleans up resources
 ```
+
+## Upgrading From `EphemeralStack-<env>`
+
+Stacks used to be named `EphemeralStack-<env>`; they are now `<env>-ephemeral`, so that CI can find
+and destroy ephemeral stacks by their `pr-` / `branch-` prefix. **CloudFormation cannot rename a
+stack**, so a deploy after this change creates a new one and leaves the old one running — and the
+two will fight over fixed names (IAM roles, KMS aliases, the ECS cluster).
+
+Destroy the old stack before deploying the new one:
+
+```bash
+# Ephemeral environments: just delete them, CI will rebuild on the next push.
+aws cloudformation delete-stack --stack-name EphemeralStack-pr-42-a3f7b1c2
+
+# Persistent environments: check what is retained first — `isPersistent` keeps buckets and keys.
+aws cloudformation describe-stack-resources --stack-name EphemeralStack-prod
+aws cloudformation delete-stack --stack-name EphemeralStack-prod
+make cdk-deploy ENV=prod
+```
+
+Retained resources (S3 buckets, KMS keys in persistent environments) survive the delete and must be
+imported or removed by hand before the new stack can claim their names.
 
 ## Troubleshooting
 

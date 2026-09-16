@@ -1,13 +1,17 @@
 {
   "name": "aws-cdk-ephemeral-environments",
   "version": "1.0.0",
-  "description": "CDK app for ephemeral AWS environments with VPC, ECS, and RDS",
+  "description": "CDK app for ephemeral, per-PR AWS environments (VPC, ECS Fargate, RDS)",
   "scripts": {
-    "build": "tsc",
-    "watch": "tsc -w",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
+    "build": "tsc --noEmit",
+    "watch": "tsc --noEmit -w",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint bin lib test",
+    "lint:fix": "eslint bin lib test --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "cdk": "cdk",
     "cdk:bootstrap": "cdk bootstrap",
     "cdk:deploy": "cdk deploy --require-approval never",
@@ -16,27 +20,23 @@
     "cdk:diff": "cdk diff",
     "cdk:list": "cdk list",
     "cdk:synth": "cdk synth",
-    "cdk:synth:output": "cdk synth -o cdk.out",
-    "cdk:synth:template": "cdk synth --json",
-    "lint": "eslint lib/ bin/ --ext .ts",
-    "lint:fix": "eslint lib/ bin/ --ext .ts --fix"
+    "precheck": "npm run format:check && npm run lint && npm run build && npm test && npm run cdk:synth -- --quiet",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
-    "aws-cdk-lib": "^2.251.0",
-    "constructs": "^10.6.0",
-    "aws-rfdk": "^1.6.0"
+    "aws-cdk-lib": "^2.268.0",
+    "constructs": "^10.8.1"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "@types/jest": "^30.0.0",
-    "typescript": "^6.0.3",
-    "aws-cdk": "^2.1120.0",
-    "ts-node": "^10.9.2",
-    "jest": "^30.3.0",
-    "ts-jest": "^29.4.9",
-    "@typescript-eslint/eslint-plugin": "^8.59.1",
-    "@typescript-eslint/parser": "^8.59.1",
-    "eslint": "^10.2.1",
-    "eslint-import-resolver-typescript": "^4.4.4"
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
+    "aws-cdk": "^2.1141.0",
+    "aws-cdk-local": "^3.0.4",
+    "eslint": "^10.10.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.22.3",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.7"
   }
 }
