@@ -9,8 +9,6 @@ export const VPC_CIDR = '10.0.0.0/16';
 export interface VpcConstructProps {
   readonly namePrefix: string;
   readonly isProduction: boolean;
-  /** MiniStack has no NAT gateway, EIP or flow log resources — see Config.isLocal. */
-  readonly isLocal?: boolean;
 }
 
 export class VpcConstruct extends Construct {
@@ -22,12 +20,12 @@ export class VpcConstruct extends Construct {
   constructor(scope: Construct, id: string, props: VpcConstructProps) {
     super(scope, id);
 
-    const { namePrefix, isProduction, isLocal = false } = props;
+    const { namePrefix, isProduction } = props;
 
     this.vpc = new ec2.Vpc(this, 'Vpc', {
       vpcName: `${namePrefix}-vpc`,
       maxAzs: isProduction ? 3 : 2,
-      natGateways: isLocal ? 0 : isProduction ? 3 : 1,
+      natGateways: isProduction ? 3 : 1,
       enableDnsHostnames: true,
       enableDnsSupport: true,
       ipAddresses: ec2.IpAddresses.cidr(VPC_CIDR),
@@ -40,10 +38,7 @@ export class VpcConstruct extends Construct {
         },
         {
           name: 'Private',
-          // Without a NAT gateway there is no egress to give these subnets.
-          subnetType: isLocal
-            ? ec2.SubnetType.PRIVATE_ISOLATED
-            : ec2.SubnetType.PRIVATE_WITH_EGRESS,
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
           cidrMask: 20,
         },
         {
@@ -58,9 +53,7 @@ export class VpcConstruct extends Construct {
     this.publicSubnets = this.vpc.publicSubnets;
     this.isolatedSubnets = this.vpc.isolatedSubnets;
 
-    if (!isLocal) {
-      this.addFlowLogs();
-    }
+    this.addFlowLogs();
 
     // Gateway endpoints only: they are free, and the NAT gateway already carries the rest of the
     // egress. Interface endpoints (ECR/logs/secrets/RDS) are ~$7/AZ/month each — real money on an

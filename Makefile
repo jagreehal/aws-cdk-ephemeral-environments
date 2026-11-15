@@ -39,39 +39,47 @@ test: ## Run the tests
 precheck: ## Typecheck, test and synth — the gate CI runs before deploying
 	npm run precheck
 
-##@ Local (MiniStack — no AWS account needed)
+##@ Local (AWS Emulator — no AWS account needed)
 
-# cdklocal points the CDK toolkit at http://localhost:4566; the dummy credentials are what
-# MiniStack expects, so no `~/.aws` profile setup is required.
+# The emulator writes its own credentials, config and CA cert to ~/.aws/emulator/<port> on start;
+# these point the CDK toolkit and AWS CLI at them. The unset stops a real profile or keys winning.
 LOCAL_ENV ?= local
-LOCAL_AWS := AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_DEFAULT_REGION=us-east-1
+# docker-compose.yml runs the emulator as you, so the files it writes on Linux are yours.
+export EMULATOR_UID := $(shell id -u)
+export EMULATOR_GID := $(shell id -g)
+EMULATOR_DIR := $(HOME)/.aws/emulator/9297
+LOCAL_AWS := unset AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; \
+  AWS_ENDPOINT_URL=https://127.0.0.1:9297 AWS_REGION=us-east-1 \
+  AWS_CONFIG_FILE=$(EMULATOR_DIR)/config \
+  AWS_SHARED_CREDENTIALS_FILE=$(EMULATOR_DIR)/emulator_credentials \
+  NODE_EXTRA_CA_CERTS=$(EMULATOR_DIR)/ca.pem
 
-local-up: ## Start MiniStack
-	docker compose up -d --wait
+local-up: ## Start AWS Emulator (builds its image the first time)
+	mkdir -p $(HOME)/.aws/emulator
+	docker compose up -d --build --wait
 
-local-down: ## Stop MiniStack
+local-down: ## Stop AWS Emulator (it keeps state in memory, so this wipes everything)
 	docker compose down
 
-local-deploy: local-up ## Start MiniStack, bootstrap and deploy — one command from nothing
-	$(LOCAL_AWS) npx cdklocal bootstrap --context env=$(LOCAL_ENV)
-	$(LOCAL_AWS) npx cdklocal deploy --require-approval never --context env=$(LOCAL_ENV) \
+local-deploy: local-up ## Start the emulator, bootstrap and deploy — one command from nothing
+	$(LOCAL_AWS) npx cdk bootstrap --context env=$(LOCAL_ENV)
+	$(LOCAL_AWS) npx cdk deploy --require-approval never --context env=$(LOCAL_ENV) \
 	  --outputs-file $(OUTPUTS_FILE)
-	@printf "\n\033[1mDeployed \033[36m$(LOCAL_ENV)-ephemeral\033[0m\033[1m to MiniStack\033[0m\n"
+	@printf "\n\033[1mDeployed \033[36m$(LOCAL_ENV)-ephemeral\033[0m\033[1m to AWS Emulator\033[0m\n"
 	@$(MAKE) --no-print-directory outputs
-	@printf "\nThe app container is running for real: \033[36mdocker ps\033[0m\n"
-	@printf "The ALB deploys but routes nowhere locally — see README, Deploy Locally with MiniStack.\n\n"
 
 local-destroy: ## Destroy the local stack
-	$(LOCAL_AWS) npx cdklocal destroy --force --context env=$(LOCAL_ENV)
+	$(LOCAL_AWS) npx cdk destroy --force --context env=$(LOCAL_ENV)
 
 local-diff: ## Diff against the local stack
-	$(LOCAL_AWS) npx cdklocal diff --context env=$(LOCAL_ENV)
+	$(LOCAL_AWS) npx cdk diff --context env=$(LOCAL_ENV)
 
-local-reset: ## Wipe MiniStack state without restarting it
-	curl -fsS -X POST http://localhost:4566/_ministack/reset && echo "MiniStack state reset"
+local-reset: ## Wipe all emulator state (restarts it; state lives in memory)
+	docker compose restart
+	docker compose up -d --wait
 
-local-stacks: ## List stacks deployed to MiniStack
-	@$(LOCAL_AWS) aws --endpoint-url=http://localhost:4566 cloudformation describe-stacks \
+local-stacks: ## List stacks deployed to the emulator
+	@$(LOCAL_AWS) aws cloudformation describe-stacks \
 	  --query 'Stacks[].[StackName,StackStatus]' --output table
 
 ##@ AWS

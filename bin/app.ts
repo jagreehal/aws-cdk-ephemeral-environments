@@ -28,7 +28,7 @@ try {
   process.exit(1);
 }
 
-// Also a Lambda-backed custom resource MiniStack cannot complete; off before the stack is built.
+// A Lambda-backed custom resource the emulator cannot complete; off before the stack is built.
 if (config.isLocal) {
   app.node.setContext('@aws-cdk/aws-ec2:restrictDefaultSecurityGroup', false);
 }

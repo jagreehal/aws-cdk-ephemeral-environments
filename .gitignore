@@ -27,5 +27,4 @@ dist/
 build/
 
 # Local
-data/
 pnpm-lock.yaml

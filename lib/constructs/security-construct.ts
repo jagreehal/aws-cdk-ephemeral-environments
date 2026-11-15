@@ -8,7 +8,7 @@ export interface SecurityConstructProps {
   readonly namePrefix: string;
   readonly isProduction: boolean;
   readonly removalPolicy: cdk.RemovalPolicy;
-  /** MiniStack cannot run CDK's auto-delete custom resource — see Config.isLocal. */
+  /** The emulator cannot complete CDK's auto-delete custom resource — see Config.isLocal. */
   readonly isLocal?: boolean;
 }
 
@@ -39,8 +39,8 @@ export class SecurityConstruct extends Construct {
   ): s3.Bucket {
     const bucket = new s3.Bucket(this, 'StorageBucket', {
       removalPolicy,
-      // Auto-delete is a Lambda-backed custom resource; MiniStack never returns its CloudFormation
-      // response, so the deploy hangs. Locally the bucket is thrown away with the container.
+      // Auto-delete is a Lambda-backed custom resource the emulator cannot complete. Locally the
+      // bucket is thrown away when the emulator stops (it keeps everything in memory).
       autoDeleteObjects: !isLocal && removalPolicy === cdk.RemovalPolicy.DESTROY,
       // Production encrypts with the app key created above; ephemeral envs use the free S3-managed
       // key rather than paying for a CMK that dies with the PR.
