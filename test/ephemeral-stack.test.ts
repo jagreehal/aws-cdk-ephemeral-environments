@@ -34,26 +34,10 @@ const local: Partial<EphemeralStackProps> = {
 };
 
 describe('EphemeralStack', () => {
-  // MiniStack's CloudFormation engine implements a subset of AWS. Local mode exists to stay inside
-  // it, so these assert the absence of the resource types that made a local deploy fail.
-  describe('local mode (MiniStack)', () => {
-    test('emits none of the resource types MiniStack cannot provision', () => {
-      const template = synth(local);
-
-      for (const type of [
-        'AWS::EC2::NatGateway',
-        'AWS::EC2::EIP',
-        'AWS::EC2::FlowLog',
-        'AWS::EC2::SecurityGroupIngress',
-        'AWS::RDS::DBSubnetGroup',
-        'AWS::SecretsManager::SecretTargetAttachment',
-        'AWS::RDS::DBInstance',
-      ]) {
-        template.resourceCountIs(type, 0);
-      }
-    });
-
-    test('emits no Lambda-backed custom resources, which MiniStack never completes', () => {
+  // AWS Emulator provisions every resource here but cannot complete Lambda-backed custom
+  // resources; local mode drops only those.
+  describe('local mode (AWS Emulator)', () => {
+    test('emits no Lambda-backed custom resources, which the emulator cannot complete', () => {
       const resources = synth(local).toJSON().Resources as Record<string, { Type: string }>;
 
       expect(
@@ -63,21 +47,24 @@ describe('EphemeralStack', () => {
       ).toHaveLength(0);
     });
 
-    test('still deploys the app: cluster, service, task definition and load balancer', () => {
+    test('otherwise deploys the same stack as AWS', () => {
       const template = synth(local);
 
-      template.resourceCountIs('AWS::ECS::Cluster', 1);
-      template.resourceCountIs('AWS::ECS::Service', 1);
-      template.resourceCountIs('AWS::ECS::TaskDefinition', 1);
-      template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
+      for (const type of [
+        'AWS::EC2::NatGateway',
+        'AWS::EC2::FlowLog',
+        'AWS::RDS::DBInstance',
+        'AWS::ECS::Service',
+        'AWS::ElasticLoadBalancingV2::LoadBalancer',
+      ]) {
+        template.resourceCountIs(type, 1);
+      }
     });
 
     test('leaves the AWS deploy untouched', () => {
-      const template = synth();
+      const resources = synth().toJSON().Resources as Record<string, { Type: string }>;
 
-      template.resourceCountIs('AWS::EC2::NatGateway', 1);
-      template.resourceCountIs('AWS::EC2::FlowLog', 1);
-      template.resourceCountIs('AWS::RDS::DBInstance', 1);
+      expect(Object.values(resources).some((r) => r.Type.startsWith('Custom::'))).toBe(true);
     });
   });
 

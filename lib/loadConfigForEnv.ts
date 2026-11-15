@@ -7,10 +7,9 @@ export interface Config {
   /** Keep resources on stack delete. Ephemeral envs (the default) are destroyed with the stack. */
   isPersistent?: boolean;
   /**
-   * Deploying to MiniStack (http://localhost:4566) rather than AWS. Its CloudFormation engine
-   * covers most of this stack but not NAT gateways, EIPs, flow logs, standalone security-group
-   * ingress, RDS subnet groups or secret target attachments, so local mode trims to the subset
-   * that deploys: no NAT, no flow logs, inline SG rules, and no RDS. See README "Local".
+   * Deploying to AWS Emulator (https://127.0.0.1:9297) rather than AWS. It provisions every
+   * resource in this stack, but cannot complete CDK's Lambda-backed custom resources, so local
+   * mode turns off the two this stack uses: S3 auto-delete and default-SG restriction.
    */
   isLocal?: boolean;
 }

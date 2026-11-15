@@ -8,7 +8,7 @@ This project enables you to spin up isolated, ephemeral AWS environments for eac
 
 ```bash
 make                # every target, grouped, with the current ENV
-make local-deploy   # the whole stack on your laptop — no AWS account (MiniStack)
+make local-deploy   # the whole stack on your laptop — no AWS account (AWS Emulator)
 ```
 
 Deploying to AWS instead:
@@ -29,7 +29,7 @@ every push, and destroys it when the PR closes.
 - 🔐 **OIDC authentication** (no long-lived AWS credentials)
 - 📦 **Environment-aware configuration** (dev/staging/prod)
 - 💾 **Persistent vs ephemeral** resource handling
-- 💻 **Local deploys** against [MiniStack](https://ministack.org) — no AWS account needed
+- 💻 **Local deploys** against [AWS Emulator](https://docs.aws.amazon.com/aws-emulator/) — no AWS account needed
 - 🏗️ **Infrastructure as Code** using AWS CDK and TypeScript
 
 ## Quick Start
@@ -301,41 +301,43 @@ Named entries merge over `default`, and **any environment without an entry gets 
 is how every CI-generated `pr-123-ab12` environment resolves without touching this file.
 `CDK_DEFAULT_ACCOUNT` overrides the account, so CI never needs a real account ID committed here.
 
-### 6. Deploy Locally with MiniStack (Optional)
+### 6. Deploy Locally with AWS Emulator (Optional)
 
-[MiniStack](https://ministack.org) emulates AWS on `http://localhost:4566`, so the whole stack can
-be deployed on a laptop with no AWS account. `cdklocal` is the CDK wrapper that points the toolkit
-at it ([docs](https://ministack.org/docs/iac#cdk)).
+[AWS Emulator](https://docs.aws.amazon.com/aws-emulator/) is AWS's own local emulator of the AWS
+APIs, so the whole stack can be deployed on a laptop with no AWS account. It runs in Docker from
+`emulator/Dockerfile` (AWS publishes no image) and serves `https://127.0.0.1:9297`. The plain
+`cdk` CLI talks to it — no wrapper — through the environment variables the Makefile sets.
 
 ```bash
-make local-deploy     # starts MiniStack, bootstraps, deploys the `local` environment
+make local-deploy     # builds + starts the emulator, bootstraps, deploys the `local` environment
 make local-stacks     # what got created
 make local-destroy    # tear the stack down
-make local-down       # stop MiniStack
-make local-reset      # wipe all MiniStack state without restarting it
+make local-reset      # wipe all state (restarts the emulator; state lives in memory)
+make local-down       # stop the emulator
 ```
 
-`make local-deploy` takes about a minute the first time (image pull) and a few seconds after that.
-It deploys the environment named `local`, whose config entry carries `"isLocal": true`.
+The first `make local-deploy` builds the image (under a minute); after that a deploy takes about
+ten seconds. It deploys the environment named `local`, whose config entry carries `"isLocal": true`.
 
-**What runs locally.** MiniStack provisions real Docker containers for ECS tasks, so the app
-container actually runs — `docker ps` shows it, and `aws --endpoint-url=http://localhost:4566 ecs
-list-tasks --cluster local-ephemeral-ecs` lists the task. The VPC, subnets, security groups, ALB,
-target group, S3 bucket, KMS keys, IAM roles, log groups, alarms and dashboard are all created.
+On start the emulator writes its credentials, config and CA certificate to
+`~/.aws/emulator/9297/`. To point your own AWS CLI or SDK code at it:
 
-**What local mode leaves out.** MiniStack's CloudFormation engine covers a subset of AWS, and it
-rejects a template up front if it contains a resource type it does not implement. `isLocal` trims
-the stack to what deploys:
+```bash
+export AWS_ENDPOINT_URL=https://127.0.0.1:9297 AWS_REGION=us-east-1
+export AWS_CONFIG_FILE=~/.aws/emulator/9297/config
+export AWS_SHARED_CREDENTIALS_FILE=~/.aws/emulator/9297/emulator_credentials
+export NODE_EXTRA_CA_CERTS=~/.aws/emulator/9297/ca.pem
+unset AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+```
 
-| Left out locally | Why |
-| --- | --- |
-| NAT gateway + EIP (private subnets become isolated) | no `AWS::EC2::NatGateway` / `AWS::EC2::EIP` |
-| VPC flow logs | no `AWS::EC2::FlowLog` |
-| RDS instance, its secret and subnet group | no `AWS::RDS::DBSubnetGroup`, which CDK always creates for a VPC-placed instance |
-| ALB → task registration (the ALB deploys but routes nowhere) | attaching makes CDK emit a standalone `AWS::EC2::SecurityGroupIngress` |
-| S3 auto-delete and default-SG restriction | Lambda-backed custom resources whose CloudFormation response never arrives |
+**What deploys.** Every resource in the stack: VPC with NAT gateway and flow logs, security
+groups, ALB wired to the ECS service, RDS instance with its secret, S3, KMS, IAM, alarms and
+dashboard. Local mode turns off only CDK's two Lambda-backed custom resources (S3 auto-delete and
+default-SG restriction), which the emulator cannot complete.
 
-None of this affects a real AWS deploy — see the "leaves the AWS deploy untouched" test.
+**What does not run.** The emulator models resources; it does not run them. No app container
+starts and the ALB answers 503, so use it to check that the stack deploys, updates and destroys
+cleanly — not to exercise the app. State is in memory and is lost when the emulator stops.
 
 ### 7. Synthesize Without Deploying
 
@@ -437,8 +439,8 @@ Each environment can be configured with:
 - **healthCheckPath** (context, not config): path the ALB polls, default `/`. The default nginx
   image answers `/` with a 200; point this at `/health` once your image serves one —
   `make cdk-deploy ENV=dev` picks it up via `--context healthCheckPath=/health`
-- **isLocal**: `true` for the MiniStack environment — trims the stack to what MiniStack's
-  CloudFormation engine implements (see [Deploy Locally with MiniStack](#6-deploy-locally-with-ministack-optional))
+- **isLocal**: `true` for the AWS Emulator environment — turns off the Lambda-backed custom
+  resources it cannot complete (see [Deploy Locally with AWS Emulator](#6-deploy-locally-with-aws-emulator-optional))
 
 Names come from the environment name alone: env `pr-42-a3f7b1c2` deploys the stack
 `pr-42-a3f7b1c2-ephemeral` and names its resources `pr-42-a3f7b1c2-ephemeral-*`. Because the stack

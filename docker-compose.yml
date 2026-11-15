@@ -1,35 +1,21 @@
-# MiniStack: local AWS emulation on http://localhost:4566 — https://ministack.org/docs/iac#cdk
+# AWS Emulator: local AWS APIs on https://127.0.0.1:9297 — https://docs.aws.amazon.com/aws-emulator/
 # Deploy this CDK app against it with `make local-deploy` (see the Makefile).
 services:
-  ministack:
-    # `:full` rather than the slim default: this stack needs the RDS drivers, and RDS/ECS are
-    # container-backed, hence the Docker socket below.
-    image: ministackorg/ministack:full
+  aws-emulator:
+    build: ./emulator
+    # Run as you, so the credentials it writes to ~/.aws/emulator are yours (AWS's Linux advice).
+    user: '${EMULATOR_UID:-1000}:${EMULATOR_GID:-1000}'
     ports:
-      - '127.0.0.1:4566:4566'
+      - '127.0.0.1:9297:9297'
+    # The emulator writes its credentials, config and CA cert under $HOME/.aws/emulator/<port>;
+    # mounting that at the same path means the host's AWS CLI and SDKs can use them as-is.
     environment:
-      - MINISTACK_REGION=${AWS_REGION:-us-east-1}
-      - MINISTACK_ACCOUNT_ID=000000000000
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # CDK ships custom resources as bundled Lambdas (S3 auto-delete, default-SG restriction);
-      # the in-process executor has no AWS SDK stubs for them, the Docker one runs them for real.
-      - LAMBDA_EXECUTOR=docker
-      # State survives `docker compose restart`; `make local-reset` wipes it without a restart.
-      - PERSIST_STATE=1
-      - S3_PERSIST=1
-      - RDS_PERSIST=1
+      HOME: ${HOME}
     volumes:
-      - './data/state:/tmp/ministack-state'
-      - './data/s3:/tmp/ministack-data/s3'
-      - '/var/run/docker.sock:/var/run/docker.sock'
+      - ${HOME}/.aws/emulator:${HOME}/.aws/emulator
+    command: ['-p', '9297', '--telemetry', 'off']
     healthcheck:
-      test:
-        [
-          'CMD',
-          'python',
-          '-c',
-          "import urllib.request; urllib.request.urlopen('http://localhost:4566/_ministack/health')",
-        ]
-      interval: 10s
+      test: ['CMD', 'curl', '-fsk', 'https://127.0.0.1:9297/__admin/health']
+      interval: 5s
       timeout: 3s
-      retries: 6
+      retries: 12

@@ -53,7 +53,6 @@ export class EphemeralStack extends cdk.Stack {
     const vpcConstruct = new VpcConstruct(this, 'Vpc', {
       namePrefix,
       isProduction: config.isProduction,
-      isLocal,
     });
 
     const securityConstruct = new SecurityConstruct(this, 'Security', {
@@ -69,7 +68,6 @@ export class EphemeralStack extends cdk.Stack {
       vpcConstruct,
       isProduction: config.isProduction,
       isEphemeral,
-      isLocal,
       removalPolicy,
       appImage,
       containerPort,
@@ -79,24 +77,20 @@ export class EphemeralStack extends cdk.Stack {
       kmsKey: securityConstruct.kmsKey,
     });
 
-    // MiniStack has no AWS::RDS::DBSubnetGroup, which CDK always creates for a VPC-placed
-    // instance, so a local deploy runs the app without a database.
-    const databaseConstruct = isLocal
-      ? undefined
-      : new DatabaseConstruct(this, 'Database', {
-          namePrefix,
-          vpcConstruct,
-          isProduction: config.isProduction,
-          isEphemeral,
-          removalPolicy,
-          dbInstanceClass,
-          dbAllocatedStorage,
-          ecsSecurityGroup: ecsConstruct.containerSecurityGroup,
-        });
+    const databaseConstruct = new DatabaseConstruct(this, 'Database', {
+      namePrefix,
+      vpcConstruct,
+      isProduction: config.isProduction,
+      isEphemeral,
+      removalPolicy,
+      dbInstanceClass,
+      dbAllocatedStorage,
+      ecsSecurityGroup: ecsConstruct.containerSecurityGroup,
+    });
 
     // The endpoint and secret ARN are stack outputs; without this the task cannot read the
     // credentials they point at.
-    databaseConstruct?.secret.grantRead(ecsConstruct.taskRole);
+    databaseConstruct.secret.grantRead(ecsConstruct.taskRole);
 
     new MonitoringConstruct(this, 'Monitoring', {
       namePrefix,
@@ -105,7 +99,7 @@ export class EphemeralStack extends cdk.Stack {
       alarmEmail,
       albName: ecsConstruct.loadBalancer.loadBalancerFullName,
       ecsClusterName: ecsConstruct.cluster.clusterName,
-      rdsIdentifier: databaseConstruct?.database.instanceIdentifier,
+      rdsIdentifier: databaseConstruct.database.instanceIdentifier,
     });
 
     this.outputReferences(ecsConstruct, databaseConstruct, securityConstruct);
